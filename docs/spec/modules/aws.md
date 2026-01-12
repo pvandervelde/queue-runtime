@@ -1,21 +1,26 @@
 # AWS SQS Provider Specification
 
-This document defines the design requirements for the AWS SQS implementation of the queue-runtime client interface, supporting both standard and FIFO queues for high-throughput and ordered message processing scenarios.
+**Status**: ✅ **Implemented** - Production-ready HTTP REST API implementation
+
+This document defines the AWS SQS implementation of the queue-runtime provider interface, supporting both standard and FIFO queues for high-throughput and ordered message processing scenarios.
 
 ## Overview
 
-The AWS SQS provider implements queue operations using Amazon Simple Queue Service, providing reliable message delivery with configurable throughput and ordering guarantees. The implementation must support both standard queues for maximum throughput and FIFO queues for strict message ordering.
+The AWS SQS provider implements queue operations using direct HTTP REST API calls to Amazon Simple Queue Service (not the AWS SDK), providing reliable message delivery with configurable throughput and ordering guarantees. The implementation supports both standard queues for maximum throughput and FIFO queues for strict message ordering.
+
+**Key Implementation Choice**: This provider uses direct HTTP REST API calls with AWS Signature V4 request signing instead of the AWS SDK. This approach enables proper unit testing with mocked HTTP responses and provides full control over request/response handling.
 
 ## Core Requirements
 
-### AWS SDK Integration
+### HTTP REST API Integration
 
-**SDK Dependencies**:
+**Implementation Approach**:
 
-- AWS SDK for Rust (aws-sdk-sqs) for SQS operations
-- AWS credential providers for authentication
-- AWS configuration management for region and endpoint settings
-- Error handling integration with AWS SDK error types
+- Direct HTTP calls to AWS SQS REST API endpoints (not AWS SDK)
+- Manual AWS Signature Version 4 request signing for authentication
+- `reqwest` HTTP client for request execution
+- Manual XML response parsing for SQS API responses
+- Enables comprehensive unit testing with mocked HTTP responses
 
 ### Client Architecture
 
@@ -31,13 +36,19 @@ The AWS SQS provider implements queue operations using Amazon Simple Queue Servi
 
 ### Authentication Methods
 
-**Authentication Strategy Support**:
+**Authentication Strategy Support** (via AWS Credential Chain):
 
-- IAM role-based authentication for production deployments
-- Access key and secret key for development and testing scenarios
-- Named AWS profile support for local development
-- Session token support for temporary credentials
-- Default credential chain for automatic credential discovery
+1. **Explicit Credentials**: Access key ID and secret access key from configuration
+2. **Environment Variables**: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`
+3. **ECS Task Metadata**: Via `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` environment variable (for ECS/Fargate)
+4. **EC2 Instance Metadata**: Via IMDSv2 at 169.254.169.254 (for EC2 instances)
+
+**Credential Management**:
+
+- Temporary credentials are automatically cached and refreshed before expiration
+- Credential expiration checking with 5-minute buffer
+- Thread-safe credential caching with `Arc<RwLock<>>`
+- Automatic credential chain traversal
 
 **Regional Configuration**:
 
