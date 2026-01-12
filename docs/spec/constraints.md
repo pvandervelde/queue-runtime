@@ -33,30 +33,13 @@ pub struct SessionId(String);
 
 ## Module Boundary Constraints
 
-### Core Library Structure
-
-```
-src/
-├── client.rs        # QueueClient trait and core operations
-├── message.rs       # Message types and operations
-├── session.rs       # Session management types and logic
-├── error.rs         # Error types and error handling
-├── config.rs        # Configuration types and validation
-├── providers/       # Cloud provider implementations
-│   ├── mod.rs       # Provider trait definitions
-│   ├── azure.rs     # Azure Service Bus implementation
-│   └── aws.rs       # AWS SQS implementation (future)
-└── testing/         # Test utilities and mocks
-    ├── mod.rs
-    └── mock.rs      # Mock implementations for testing
-```
-
 ### Dependency Rules
 
-- **Core modules** (client.rs, message.rs, session.rs) NEVER import from `providers/`
-- **Provider trait definitions** (providers/mod.rs) define contracts, NEVER import from specific providers
-- **Provider implementations** (providers/azure.rs, providers/aws.rs) implement traits, MAY import provider SDKs
-- **Integration tests** MAY import from any module
+- **Core client modules** (`client.rs`, `message.rs`, `sessions.rs`) define traits and types, NEVER import provider implementations
+- **Provider trait definitions** (`provider.rs`) define `QueueProvider` and `SessionProvider` traits, NEVER import specific providers
+- **Provider implementations** (`providers/azure.rs`, `providers/aws.rs`, `providers/memory.rs`) implement traits, MAY import external SDKs or HTTP libraries
+- **Error module** (`error.rs`) defines provider-agnostic errors, NO provider-specific types
+- **Integration tests** MAY import from any module for testing purposes
 
 ## Provider Abstraction Constraints
 

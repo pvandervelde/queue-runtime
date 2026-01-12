@@ -1,334 +1,560 @@
 # Queue Client Module
 
-The queue client module provides the core abstraction layer for queue operations, defining the main traits and interfaces that enable provider-agnostic queue handling.
+The queue client module provides the core traits and factory for queue operations, defining provider-agnostic interfaces that work consistently across Azure Service Bus, AWS SQS, and in-memory implementations.
 
 ## Overview
 
-The queue client module establishes a unified API that abstracts the differences between Azure Service Bus and AWS SQS, providing consistent interfaces for message operations while preserving provider-specific capabilities like sessions and FIFO ordering.
+This module establishes a three-tier trait hierarchy:
+
+1. **QueueClient**: High-level interface for applications
+2. **SessionClient**: High-level interface for session-based processing
+3. **QueueProvider**: Low-level interface implemented by provider adapters
+
+Applications interact with `QueueClient` and `SessionClient` traits, which are implemented by `StandardQueueClient` and `StandardSessionClient` that wrap provider implementations.
 
 ## Core Traits
 
-### QueueClient Design Requirements
+### QueueClient
 
-**Core Interface Design**:
+The main interface for queue operations across all providers. Applications should depend on this trait, not concrete implementations.
 
-- Async trait with Send + Sync + Clone bounds for multi-threaded usage
-- Generic over Message, Receipt, and Error types for provider flexibility
-- Consistent method signatures across Azure Service Bus and AWS SQS implementations
+**Trait Requirements**:
+
+- `async_trait` for async methods
+- `Send + Sync` for thread-safe sharing across async tasks
+- All operations return `Result<T, QueueError>` for consistent error handling
 
 **Message Operations**:
 
-- Send individual messages with configurable options (session, TTL, scheduling)
-- Batch send operations for improved throughput and reduced API calls
-- Receive with timeout, batch size, and session filtering support
-- Acknowledge, reject, and requeue operations with receipt-based tracking
+```rust
+/// Send single message to queue
+async fn send_message(
+    &self,
+    queue: &QueueName,
+    message: Message,
+) -> Result<MessageId, QueueError>;
 
-**Queue Management**:
+/// Send multiple messages in batch (if provider supports batching)
+async fn send_messages(
+    &self,
+    queue: &QueueName,
+    messages: Vec<Message>,
+) -> Result<Vec<MessageId>, QueueError>;
 
-- Queue information retrieval (depth, statistics, configuration)
-- Queue provisioning with definition-based configuration
-- Queue deletion with safety considerations
+/// Receive single message from queue with timeout
+async fn receive_message(
+    &self,
+    queue: &QueueName,
+    timeout: Duration,
+) -> Result<Option<ReceivedMessage>, QueueError>;
 
-**Error Handling**:
+/// Receive multiple messages from queue
+async fn receive_messages(
+    &self,
+    queue: &QueueName,
+    max_messages: u32,
+    timeout: Duration,
+) -> Result<Vec<ReceivedMessage>, QueueError>;
+```
 
-- Provider-specific error types implementing common error interface
-- Categorized errors (network, authentication, quota, transient vs permanent)
-
-### QueueMessage
-
-Trait for messages that can be sent to queues:
+**Message Lifecycle Operations**:
 
 ```rust
-pub trait QueueMessage: Send + Sync + Clone + Debug {
-    /// Unique identifier for the message
-    fn message_id(&self) -> &str;
+/// Mark message as successfully processed (removes from queue)
+async fn complete_message(&self, receipt: ReceiptHandle) -> Result<(), QueueError>;
 
-    /// Session ID for ordered processing (if applicable)
-    fn session_id(&self) -> Option<&str>;
+/// Return message to queue for retry (makes visible again)
+async fn abandon_message(&self, receipt: ReceiptHandle) -> Result<(), QueueError>;
 
-    /// Correlation ID for request/response patterns
-    fn correlation_id(&self) -> Option<&str>;
+/// Send message to dead letter queue (permanent failure)
+async fn dead_letter_message(
+    &self,
+    receipt: ReceiptHandle,
+    reason: String,
+) -> Result<(), QueueError>;
+```
 
-    /// Content type of the message body
-    fn content_type(&self) -> &str;
+**Session Operations**:
 
-    /// Raw message body as bytes
-    fn body(&self) -> &[u8];
+```rust
+/// Accept session for ordered processing
+///
+/// - If session_id is Some, attempts to accept that specific session
+/// - If session_id is None, accepts next available session
+/// - Returns SessionClient for processing messages in order
+async fn accept_session(
+    &self,
+    queue: &QueueName,
+    session_id: Option<SessionId>,
+) -> Result<Box<dyn SessionClient>, QueueError>;
+```
 
-    /// Custom properties/headers for the message
-    fn properties(&self) -> &HashMap<String, String>;
+**Provider Capability Queries**:
 
-    /// Time-to-live for the message
-    fn ttl(&self) -> Option<Duration>;
+```rust
+/// Get provider type (Azure, Aws, InMemory)
+fn provider_type(&self) -> ProviderType;
 
-    /// Scheduled enqueue time for delayed delivery
-    fn scheduled_enqueue_time(&self) -> Option<DateTime<Utc>>;
+/// Check if provider supports sessions
+fn supports_sessions(&self) -> bool;
+
+/// Check if provider supports batch operations
+fn supports_batching(&self) -> bool;
+```
+
+### SessionClient
+
+Interface for session-based ordered message processing. Messages within a session are guaranteed to be delivered in FIFO order.
+
+**Trait Requirements**:
+
+- `async_trait` for async methods
+- `Send + Sync` for thread-safe sharing across async tasks
+- Session lock is held until `close_session()` is called or session expires
+
+**Session Message Operations**:
+
+```rust
+/// Receive message from session (maintains FIFO order)
+async fn receive_message(
+    &self,
+    timeout: Duration,
+) -> Result<Option<ReceivedMessage>, QueueError>;
+
+/// Complete message in session
+async fn complete_message(&self, receipt: ReceiptHandle) -> Result<(), QueueError>;
+
+/// Abandon message in session
+async fn abandon_message(&self, receipt: ReceiptHandle) -> Result<(), QueueError>;
+
+/// Send message to dead letter queue
+async fn dead_letter_message(
+    &self,
+    receipt: ReceiptHandle,
+    reason: String,
+) -> Result<(), QueueError>;
+```
+
+**Session Management**:
+
+```rust
+/// Renew session lock to prevent timeout
+///
+/// Must be called periodically during long-running processing
+/// to maintain exclusive access to the session
+async fn renew_session_lock(&self) -> Result<(), QueueError>;
+
+/// Close session and release lock
+///
+/// Allows other consumers to accept this session
+async fn close_session(&self) -> Result<(), QueueError>;
+
+/// Get session ID
+fn session_id(&self) -> &SessionId;
+
+/// Get session expiry time
+fn session_expires_at(&self) -> Timestamp;
+```
+
+### QueueProvider
+
+Low-level trait implemented by provider adapters (Azure, AWS, InMemory). Applications should NOT depend on this trait directly - use `QueueClient` instead.
+
+**Trait Requirements**:
+
+- `async_trait` for async methods
+- `Send + Sync` for thread-safe sharing
+- Takes references to parameters (unlike QueueClient which takes ownership)
+
+**Provider Operations**:
+
+```rust
+/// Send single message
+async fn send_message(
+    &self,
+    queue: &QueueName,
+    message: &Message,
+) -> Result<MessageId, QueueError>;
+
+/// Send multiple messages (batch)
+async fn send_messages(
+    &self,
+    queue: &QueueName,
+    messages: &[Message],
+) -> Result<Vec<MessageId>, QueueError>;
+
+/// Receive single message
+async fn receive_message(
+    &self,
+    queue: &QueueName,
+    timeout: Duration,
+) -> Result<Option<ReceivedMessage>, QueueError>;
+
+/// Receive multiple messages
+async fn receive_messages(
+    &self,
+    queue: &QueueName,
+    max_messages: u32,
+    timeout: Duration,
+) -> Result<Vec<ReceivedMessage>, QueueError>;
+
+/// Complete message processing
+async fn complete_message(&self, receipt: &ReceiptHandle) -> Result<(), QueueError>;
+
+/// Abandon message for retry
+async fn abandon_message(&self, receipt: &ReceiptHandle) -> Result<(), QueueError>;
+
+/// Send to dead letter queue
+async fn dead_letter_message(
+    &self,
+    receipt: &ReceiptHandle,
+    reason: &str,
+) -> Result<(), QueueError>;
+
+/// Create session client for ordered processing
+async fn create_session_client(
+    &self,
+    queue: &QueueName,
+    session_id: Option<SessionId>,
+) -> Result<Box<dyn SessionProvider>, QueueError>;
+```
+
+**Provider Capability Reporting**:
+
+```rust
+/// Get provider type
+fn provider_type(&self) -> ProviderType;
+
+/// Report session support capability
+fn supports_sessions(&self) -> SessionSupport;
+
+/// Check if batch operations are supported
+fn supports_batching(&self) -> bool;
+
+/// Get maximum batch size
+fn max_batch_size(&self) -> u32;
+```
+
+### SessionProvider
+
+Low-level trait for session-based operations, implemented by provider adapters. Applications should NOT depend on this trait directly - use `SessionClient` instead.
+
+**Trait Requirements**:
+
+- `async_trait` for async methods
+- `Send + Sync` for thread-safe sharing
+- Takes references to parameters
+
+**Session Provider Operations**:
+
+```rust
+/// Receive message from session
+async fn receive_message(
+    &self,
+    timeout: Duration,
+) -> Result<Option<ReceivedMessage>, QueueError>;
+
+/// Complete message
+async fn complete_message(&self, receipt: &ReceiptHandle) -> Result<(), QueueError>;
+
+/// Abandon message
+async fn abandon_message(&self, receipt: &ReceiptHandle) -> Result<(), QueueError>;
+
+/// Send to dead letter queue
+async fn dead_letter_message(
+    &self,
+    receipt: &ReceiptHandle,
+    reason: &str,
+) -> Result<(), QueueError>;
+
+/// Renew session lock
+async fn renew_session_lock(&self) -> Result<(), QueueError>;
+
+/// Close session
+async fn close_session(&self) -> Result<(), QueueError>;
+
+/// Get session ID
+fn session_id(&self) -> &SessionId;
+
+/// Get session expiry timestamp
+fn session_expires_at(&self) -> Timestamp;
+```
+
+## StandardQueueClient
+
+Concrete implementation of `QueueClient` trait that wraps a `QueueProvider` implementation.
+
+**Responsibilities**:
+
+- Adapt `QueueProvider` low-level interface to `QueueClient` high-level interface
+- Handle ownership conversions (QueueClient takes ownership, QueueProvider takes references)
+- Wrap `SessionProvider` in `StandardSessionClient` for consistency
+
+**Construction**:
+
+```rust
+impl StandardQueueClient {
+    /// Create new client wrapping a provider
+    pub fn new(provider: Arc<dyn QueueProvider>) -> Self;
 }
 ```
 
-### MessageReceipt
+**Design Notes**:
 
-Trait for message receipts used in acknowledgment operations:
+- Holds `Arc<dyn QueueProvider>` for shared ownership
+- Implements `Clone` to enable sharing across async tasks
+- All trait methods delegate to underlying provider
+
+## StandardSessionClient
+
+Concrete implementation of `SessionClient` trait that wraps a `SessionProvider` implementation.
+
+**Responsibilities**:
+
+- Adapt `SessionProvider` low-level interface to `SessionClient` high-level interface
+- Handle ownership conversions
+- Maintain session metadata (ID, expiry timestamp)
+
+**Construction**:
 
 ```rust
-pub trait MessageReceipt: Send + Sync + Clone + Debug {
-    /// Unique receipt identifier
-    fn receipt_id(&self) -> &str;
-
-    /// Original message ID this receipt corresponds to
-    fn message_id(&self) -> &str;
-
-    /// Queue name where the message was received from
-    fn queue_name(&self) -> &str;
-
-    /// Number of times this message has been delivered
-    fn delivery_count(&self) -> u32;
-
-    /// When the message was originally enqueued
-    fn enqueued_at(&self) -> DateTime<Utc>;
-
-    /// When the message was received by this consumer
-    fn received_at(&self) -> DateTime<Utc>;
-
-    /// Session ID if the message is part of a session
-    fn session_id(&self) -> Option<&str>;
+impl StandardSessionClient {
+    /// Create new session client wrapping a provider
+    pub fn new(provider: Box<dyn SessionProvider>) -> Self;
 }
 ```
 
-## Core Types
+**Design Notes**:
 
-### ReceivedMessage
+- Holds `Box<dyn SessionProvider>` for owned provider instance
+- NOT clonable (session ownership is exclusive)
+- All trait methods delegate to underlying provider
 
-**Message Container Requirements**:
+## QueueClientFactory
 
-- Generic message type supporting any QueueMessage implementation
-- Associated receipt type for message acknowledgment operations
-- Delivery count tracking for retry logic and dead letter handling
-- Timestamp tracking for message age and processing time analysis
-- Message lock expiration tracking for distributed processing coordination
+Factory for creating `QueueClient` instances from configuration.
 
-**Lock Management Requirements**:
+**Responsibilities**:
 
-- Lock expiration detection for processing timeout scenarios
-- Remaining lock time calculation for processing scheduling
-- Automatic lock extension support for long-running operations
-- Graceful handling of expired locks with appropriate error responses
+- Parse `QueueConfig` to determine provider type
+- Instantiate appropriate provider (Azure, AWS, InMemory)
+- Wrap provider in `StandardQueueClient`
+- Validate configuration before creating provider
 
-### SendOptions
+**Factory Method**:
 
-**Message Send Configuration Requirements**:
+```rust
+impl QueueClientFactory {
+    /// Create queue client from configuration
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Queue configuration specifying provider and settings
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - Configuration is invalid
+    /// - Provider initialization fails
+    /// - Authentication fails
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use queue_runtime::{QueueClientFactory, QueueConfig, ProviderConfig};
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let config = QueueConfig {
+    ///     provider: ProviderConfig::InMemory(Default::default()),
+    ///     retry_policy: Default::default(),
+    ///     timeout: Default::default(),
+    /// };
+    ///
+    /// let client = QueueClientFactory::create_client(config).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn create_client(config: QueueConfig) -> Result<Arc<dyn QueueClient>, QueueError>;
+}
+```
 
-- Session ID specification for ordered processing workflows
-- Correlation ID for request/response and tracing patterns
-- Scheduled delivery time support for delayed message processing
-- Time-to-live configuration for automatic message expiration
-- Custom properties for metadata and routing information
-- Content type override for specialized message formats
-- Duplicate detection ID for exactly-once delivery guarantees
+## Usage Patterns
 
-**Builder Pattern Requirements**:
+### Basic Send/Receive
 
-- Fluent builder methods for ergonomic configuration
-- Method chaining support for concise option specification
-- Delay configuration with automatic timestamp calculation
-- Property attachment with key-value pairs
+```rust
+use queue_runtime::{QueueClientFactory, QueueConfig, QueueName, Message};
+use bytes::Bytes;
+use chrono::Duration;
 
-### ReceiveOptions
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+// Create client from configuration
+let config = QueueConfig::default();
+let client = QueueClientFactory::create_client(config).await?;
 
-**Message Receive Configuration Requirements**:
+// Send a message
+let queue = QueueName::new("my-queue".to_string())?;
+let message = Message::new(Bytes::from("Hello, World!"));
+let message_id = client.send_message(&queue, message).await?;
 
-- Maximum message batch size control for throughput optimization
-- Configurable timeout duration for receive operations
-- Session-specific message consumption for ordered processing
-- Session acceptance flexibility for load balancing scenarios
-- Message lock duration control for processing time management
-- Peek-only mode for message inspection without consumption
-- Sequence number positioning for replay and recovery scenarios
+// Receive a message
+let received = client.receive_message(&queue, Duration::seconds(30)).await?;
 
-**Receive Behavior Configuration**:
+if let Some(msg) = received {
+    // Process the message
+    println!("Received: {:?}", msg.body);
 
-- Batch size optimization for different processing patterns
-- Timeout configuration for responsive vs. efficient polling
-- Session targeting for specific workflow requirements
-- Lock duration matching processing time expectations
+    // Mark as complete
+    client.complete_message(msg.receipt_handle).await?;
+}
+# Ok(())
+# }
+```
 
-### QueueInfo
+### Session-Based Processing
 
-**Queue Statistics Requirements**:
+```rust
+use queue_runtime::{QueueClientFactory, QueueConfig, QueueName};
+use chrono::Duration;
 
-- Queue name and unique identification
-- Message count tracking (total, active, dead letter, scheduled)
-- Queue size monitoring in bytes for capacity planning
-- Creation and last update timestamps for audit trails
-- Current operational status for health monitoring
-- Configuration snapshot for compliance verification
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+let config = QueueConfig::default();
+let client = QueueClientFactory::create_client(config).await?;
+let queue = QueueName::new("my-queue".to_string())?;
 
-**Queue Status Classifications**:
+// Accept next available session
+let session = client.accept_session(&queue, None).await?;
 
-- **Active**: Normal operational state accepting and delivering messages
-- **Creating**: Queue initialization in progress
-- **Deleting**: Queue removal operation in progress
-- **Disabled**: Temporarily suspended operations (send and receive blocked)
-- **ReceiveDisabled**: Send-only mode (receive operations blocked)
-- **SendDisabled**: Receive-only mode (send operations blocked)
-- **Unknown**: Status cannot be determined or provider-specific state
+// Process messages in order
+while let Some(msg) = session.receive_message(Duration::seconds(30)).await? {
+    // Messages arrive in FIFO order
+    println!("Processing: {:?}", msg.body);
 
-**Queue Configuration Tracking**:
+    // Complete message
+    session.complete_message(msg.receipt_handle).await?;
+}
 
-- Maximum delivery attempt count before dead lettering
-- Message time-to-live settings for automatic cleanup
-- Message lock duration for processing coordination
-- Session enablement for ordered processing workflows
-- Dead letter queue configuration for failure handling
-- Duplicate detection settings for exactly-once delivery
-- Maximum queue size limits for capacity management
+// Close session
+session.close_session().await?;
+# Ok(())
+# }
+```
 
-### QueueDefinition
+### Batch Operations
 
-**Queue Configuration Template Requirements**:
+```rust
+use queue_runtime::{QueueClientFactory, QueueConfig, QueueName, Message};
+use bytes::Bytes;
+use chrono::Duration;
 
-- Unique queue name for identification and routing
-- Maximum delivery attempt count before dead letter processing
-- Message time-to-live for automatic message expiration
-- Message lock duration for processing timeout control
-- Session enablement for ordered message processing
-- Dead letter queue activation for failure handling
-- Duplicate detection configuration for exactly-once delivery
-- Duplicate detection time window for deduplication scope
-- Maximum queue size limits for storage management
-- Auto-delete configuration for unused queue cleanup
-- Batch operation support for performance optimization
-- Express messaging for low-latency scenarios
-- Queue partitioning for horizontal scaling
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+let config = QueueConfig::default();
+let client = QueueClientFactory::create_client(config).await?;
+let queue = QueueName::new("my-queue".to_string())?;
 
-**Default Configuration Strategy**:
+// Send batch (if provider supports batching)
+if client.supports_batching() {
+    let messages = vec![
+        Message::new(Bytes::from("Message 1")),
+        Message::new(Bytes::from("Message 2")),
+        Message::new(Bytes::from("Message 3")),
+    ];
 
-- Conservative delivery count (3 attempts) for reliability
-- 24-hour message TTL for reasonable retention
-- 60-second lock duration for typical processing time
-- Sessions enabled by default for GitHub event ordering
-- Dead lettering enabled for debugging failed messages
-- Duplicate detection enabled for idempotency
-- 10-minute deduplication window for webhook retries
-- 1GB queue size limit for resource management
-- Batch operations enabled for throughput optimization
+    let message_ids = client.send_messages(&queue, messages).await?;
+    println!("Sent {} messages", message_ids.len());
+}
 
-**Queue Definition Builder Requirements**:
+// Receive batch
+let messages = client.receive_messages(&queue, 10, Duration::seconds(30)).await?;
+for msg in messages {
+    // Process each message
+    client.complete_message(msg.receipt_handle).await?;
+}
+# Ok(())
+# }
+```
 
-- Fluent builder methods for configuration customization
-- Delivery count configuration for retry behavior
-- TTL configuration for message lifecycle management
-- Lock duration tuning for processing time requirements
+### Error Handling
 
-## Error Types
+```rust
+use queue_runtime::{QueueClientFactory, QueueConfig, QueueName, Message, QueueError};
+use bytes::Bytes;
+use chrono::Duration;
 
-### QueueError
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+let config = QueueConfig::default();
+let client = QueueClientFactory::create_client(config).await?;
+let queue = QueueName::new("my-queue".to_string())?;
 
-**Error Classification Requirements**:
+let message = Message::new(Bytes::from("data"));
 
-- Base error trait for consistent error handling across providers
-- Transient error identification for automatic retry logic
-- Permanent error classification to avoid futile retries
-- Provider-specific error codes for detailed troubleshooting
-- Retry delay hints for intelligent backoff strategies
+match client.send_message(&queue, message).await {
+    Ok(message_id) => {
+        println!("Sent: {}", message_id);
+    }
+    Err(QueueError::Timeout) => {
+        // Retry with exponential backoff
+        eprintln!("Timeout, will retry");
+    }
+    Err(QueueError::Authentication(msg)) => {
+        // Fatal error, don't retry
+        eprintln!("Auth failed: {}", msg);
+        return Err(msg.into());
+    }
+    Err(e) => {
+        // Handle other errors
+        eprintln!("Error: {}", e);
+    }
+}
+# Ok(())
+# }
+```
 
-**Error Categories**:
+## Behavioral Assertions
 
-- **ConnectionFailed**: Network connectivity and connection establishment errors
-- **AuthenticationFailed**: Credential and authorization failures
-- **QueueNotFound**: Invalid queue name or missing queue references
-- **MessageNotFound**: Message ID references for non-existent messages
-- **SessionNotFound**: Invalid session ID for session-based operations
-- **LockExpired**: Message processing timeout violations
-- **OperationTimeout**: Client-side operation timeout conditions
-    Timeout { timeout: Duration },
+### QueueClient Assertions
 
-- **RateLimitExceeded**: Provider rate limiting and throttling responses
-- **MessageTooLarge**: Message size validation against provider limits
-- **InvalidMessage**: Message format and content validation failures
-- **ServiceUnavailable**: Provider service outages and maintenance windows
-- **Configuration**: Configuration validation and setup errors
-- **Serialization**: Message serialization and deserialization failures
+1. **send_message must generate unique MessageId**: Each message sent returns a unique identifier
+2. **receive_message with no messages returns None**: Empty queue returns None after timeout
+3. **complete_message must remove message from queue**: Completed messages are not redelivered
+4. **abandon_message must make message visible again**: Abandoned messages can be received by other consumers
+5. **dead_letter_message must move message to DLQ**: Message removed from main queue and sent to dead letter queue
+6. **accept_session with Some(id) must accept specific session**: Targets specific session for processing
+7. **accept_session with None must accept next available session**: Accepts any session with messages
 
-**Error Trait Implementation Requirements**:
+### SessionClient Assertions
 
-- Transient error classification for retry eligibility (ConnectionFailed, Timeout, RateLimitExceeded, ServiceUnavailable)
-- Permanent error identification to prevent infinite retries
-- Error code mapping for provider-specific troubleshooting and monitoring
-- Retry delay recommendations for intelligent backoff strategies
+1. **receive_message must return messages in FIFO order**: Messages within session processed in send order
+2. **session_id must return accepted session ID**: Returns the session identifier for this client
+3. **session_expires_at must return valid timestamp**: Returns future timestamp indicating session lock expiry
+4. **renew_session_lock must extend expiry time**: Session lock extended to prevent timeout
+5. **close_session must release session lock**: Other consumers can accept session after close
 
-## Client Factory
+### Provider Capability Assertions
 
-### QueueClientFactory
+1. **supports_sessions must match provider capability**: Returns true only for providers with session support
+2. **supports_batching must match provider capability**: Returns true only for providers with batch operations
+3. **provider_type must return correct enum variant**: Identifies provider (Azure, Aws, InMemory)
 
-**Factory Design Requirements**:
+## Testing Strategy
 
-- Provider-agnostic client creation based on configuration
-- Support for Azure Service Bus, AWS SQS, and In-Memory providers
-- Configuration-driven provider selection and instantiation
-- Consistent error handling across provider implementations
-- Provider-specific factory methods for direct client creation
-- Dynamic client instantiation based on runtime configuration
+### Unit Testing
 
-## Usage Examples
+- Mock `QueueProvider` implementations for testing `StandardQueueClient`
+- Mock `SessionProvider` implementations for testing `StandardSessionClient`
+- Test factory with in-memory configuration for fast tests
+- Verify error handling and retry logic
 
-**Client Usage Requirements**:
+### Integration Testing
 
-- Environment-based configuration loading
-- Factory-based client instantiation
-- Queue creation and configuration management
-- Message sending with delivery options (session ID, correlation ID)
-- Message receiving with configurable timeouts and batch sizes
-- Receipt-based message lifecycle management (acknowledge, reject, requeue)
-- Delivery count tracking and exponential backoff retry strategies
-- Dead letter queue handling for poison messages
+- Test against real Azure Service Bus (requires Azure credentials)
+- Test against real AWS SQS (requires AWS credentials)
+- Test against LocalStack for AWS integration without real AWS account
+- Verify session ordering across provider implementations
 
-**Batch Processing Requirements**:
+### Contract Testing
 
-- Batch message sending for high-throughput scenarios
-- Individual result tracking for batch operations
-- Session-based batch processing for ordered workflows
-- Error handling and partial failure management in batch operations
-
-**Session Processing Requirements**:
-
-- Session-based message ordering and sequential processing
-- Session timeout configuration and session lifecycle management
-- Session completion detection and graceful termination
-- Error handling with session processing interruption on failures
-- Message acknowledgment within session boundaries
-
-## Testing Support
-
-**Mock Implementation Requirements**:
-
-- In-memory mock client for unit testing
-- Message storage and retrieval simulation
-- Receipt lifecycle simulation and verification
-- Queue state management and inspection capabilities
-- Configurable error injection for failure scenario testing
-- Thread-safe implementations for concurrent test scenarios
-
-## Performance Expectations
-
-**Latency Requirements**:
-
-- **Send Operations**: ~2-5ms per message, ~10-20ms for batch of 10
-- **Receive Operations**: ~5-15ms with long polling, ~1-3ms without polling
-- **Acknowledgment**: ~1-3ms per receipt
-
-**Throughput Requirements**:
-
-- **Send Rate**: 1000+ messages per second per client
-- **Receive Rate**: 500+ messages per second per client
-- **Batch Processing**: 10,000+ messages per batch operation
-- **Concurrent Clients**: Support 100+ concurrent client connections per provider
-
-## Performance Characteristics
-
-- **Send Operations**: ~2-5ms per message, ~10-20ms for batch of 10
-- **Receive Operations**: ~10-50ms depending on message availability
-- **Acknowledgment**: ~1-3ms per receipt
-- **Session Processing**: Adds ~5-10ms overhead for session management
-- **Connection Overhead**: ~100-500ms for initial connection establishment
-- **Memory Usage**: ~1KB per message in flight, ~100KB base client overhead
+- All providers must pass same test suite
+- Verify behavioral assertions against each provider
+- Test edge cases (empty queues, session timeouts, lock expiry)
+- Test error scenarios (network failures, authentication errors)

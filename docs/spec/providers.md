@@ -86,6 +86,8 @@ pub enum TransportType {
 
 ## AWS SQS Implementation
 
+**Status**: ✅ **Implemented** - Production-ready HTTP REST API implementation
+
 ### FIFO Queue Behavior
 
 **Message Group Ordering**:
@@ -94,6 +96,13 @@ pub enum TransportType {
 - Message group ID determines processing order
 - Deduplication based on message content or deduplication ID
 - Higher throughput with multiple message groups
+
+**Implementation Approach**:
+
+- Uses direct HTTP REST API calls (not AWS SDK)
+- Enables proper unit testing with mocked HTTP responses
+- Implements AWS Signature Version 4 request signing
+- Automatic credential chain: explicit credentials → environment variables → ECS task metadata → EC2 instance metadata
 
 **Implementation Mapping**:
 
@@ -133,19 +142,19 @@ pub enum TransportType {
 - Cross-account DLQ access patterns
 
 ```rust
-// AWS SQS specific configuration
+// AWS SQS specific configuration (actual implementation)
 pub struct AwsSqsConfig {
     pub region: String,
     pub access_key_id: Option<String>,
     pub secret_access_key: Option<String>,
-    pub session_token: Option<String>,
-    pub role_arn: Option<String>,
-    pub queue_url: String,
-    pub max_number_of_messages: i32,
-    pub visibility_timeout: Option<Duration>,
-    pub wait_time_seconds: Option<Duration>,
-    pub message_retention_period: Duration,
+    pub use_fifo_queues: bool,
 }
+
+// Authentication Methods Supported:
+// 1. Explicit credentials (access_key_id + secret_access_key)
+// 2. Environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN)
+// 3. ECS task metadata (AWS_CONTAINER_CREDENTIALS_RELATIVE_URI)
+// 4. EC2 instance metadata (IMDSv2)
 ```
 
 ## In-Memory Implementation

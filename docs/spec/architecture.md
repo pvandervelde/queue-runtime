@@ -127,19 +127,19 @@ graph TB
 
 ### Port Layer (Abstraction Interfaces)
 
-**Purpose**: Define contracts that providers must implement.
+**Purpose**: Define contracts that provider implementations must satisfy.
 
-**Ports Defined**:
+**Traits Defined**:
 
-1. **Provider Port**: Queue operations (send, receive, complete, abandon)
-2. **Session Port**: Session operations (accept, receive, release)
-3. **Configuration Port**: Provider configuration and initialization
+1. **QueueProvider**: Queue operations (send, receive, complete, abandon, create_session_client)
+2. **SessionProvider**: Session operations (receive, complete, abandon, renew_session_lock, close_session)
 
 **Key Abstractions**:
 
-- **QueueClient**: Primary interface for queue operations
-- **SessionClient**: Interface for session-based ordered processing
-- **Provider Capabilities**: Enumeration of provider feature support (native vs emulated sessions)
+- **QueueClient**: High-level API trait for application use
+- **SessionClient**: High-level API trait for session-based processing
+- **ProviderType**: Enum distinguishing Azure, AWS, or InMemory implementations
+- **SessionSupport**: Enum indicating Native, Emulated, or Unsupported session capabilities
 
 **Responsibilities**:
 
@@ -158,35 +158,39 @@ graph TB
 
 **Purpose**: Implement port interfaces for specific cloud providers.
 
-**Adapters**:
+**Provider Implementations**:
 
-1. **Azure Service Bus Adapter**:
-   - Implements ports using Azure Service Bus SDK
+1. **AzureServiceBusProvider**:
+   - Implements `QueueProvider` and `SessionProvider` traits using Azure Service Bus SDK
    - Native session support via Azure Service Bus sessions
    - Connection string and managed identity authentication
+   - ProviderType: ProviderType::Azure
 
-2. **AWS SQS Adapter**:
-   - Implements ports using AWS SDK for Rust
+2. **AwsSqsProvider**:
+   - Implements `QueueProvider` and `SessionProvider` traits using direct HTTP REST API calls
    - Emulated sessions via FIFO queues and message groups
-   - IAM role and access key authentication
+   - IAM role, access key, and credential chain authentication
+   - ProviderType: ProviderType::Aws
 
-3. **In-Memory Adapter**:
-   - Implements ports using in-memory data structures
+3. **InMemoryProvider**:
+   - Implements `QueueProvider` trait using in-memory data structures
    - For testing and local development only
    - Simulates provider behaviors deterministically
+   - ProviderType: ProviderType::InMemory
 
 **Responsibilities**:
 
-- Map common operations to provider-specific APIs
+- Implement `QueueProvider` trait operations for provider-specific APIs
+- Implement `SessionProvider` trait for session-capable providers (Azure, AWS FIFO)
 - Handle provider authentication and connection management
-- Translate provider errors to common error types
-- Manage provider-specific resources (connections, senders, receivers)
+- Translate provider-specific errors to `QueueError` variants
+- Manage provider-specific resources (connections, HTTP clients, credential caches)
 
 **NOT Responsible For**:
 
-- Business logic (retry, circuit breaking, DLQ decisions)
-- Cross-provider orchestration
-- Session ordering logic (enforced by provider or emulated)
+- Business logic (retry, circuit breaking, DLQ decisions defined in client layer)
+- Cross-provider orchestration or switching
+- Session ordering logic (enforced by cloud provider's native mechanisms)
 
 ---
 
@@ -194,23 +198,24 @@ graph TB
 
 ### Dependency Flow Rules
 
-**Rule 1: Business Logic → Ports (Abstraction)**
+**Rule 1: Business Logic → Abstractions**
 
-- Business logic components depend only on port traits
-- NO imports of concrete provider adapters in business logic
-- Enforced by module visibility and compilation
+- Business logic components depend only on `QueueProvider` and `SessionProvider` traits
+- NO imports of concrete provider implementations (AzureServiceBusProvider, AwsSqsProvider) in client code
+- Enforced by module visibility and trait bounds
 
-**Rule 2: Adapters → Ports (Implementation)**
+**Rule 2: Providers → Trait Implementation**
 
-- Adapters implement port traits
-- Adapters may depend on provider SDKs
-- Adapters MAY NOT depend on other adapters
+- Provider implementations (`AzureServiceBusProvider`, `AwsSqsProvider`, `InMemoryProvider`) implement `QueueProvider` trait
+- Session-capable providers (`AzureServiceBusProvider`, `AwsSqsProvider`) also implement `SessionProvider` trait
+- Providers may depend on external SDKs or HTTP clients (Azure SDK, reqwest for AWS)
+- Providers MUST NOT depend on other provider implementations
 
-**Rule 3: Application → Business Logic**
+**Rule 3: Application → Client API**
 
-- Applications use business logic API (QueueClient trait)
-- Applications configure provider selection at runtime
-- Applications receive provider-agnostic errors
+- Applications use high-level client traits (`QueueClient`, `SessionClient`)
+- Applications configure provider selection via `QueueClientFactory` at runtime
+- Applications receive provider-agnostic `QueueError` results
 
 **Visualization**:
 

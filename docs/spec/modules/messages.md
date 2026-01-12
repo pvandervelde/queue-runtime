@@ -1,257 +1,552 @@
 # Message Types Module
 
-The message types module defines the standardized message formats, serialization patterns, and envelope structures used throughout the queue runtime system.
+The message types module defines the domain identifiers, message structures, and serialization patterns used throughout the queue runtime library.
 
 ## Overview
 
-This module establishes the canonical message format for GitHub events flowing through the queue system, providing type-safe serialization/deserialization and ensuring compatibility between Queue-Keeper and bot consumers.
+This module provides **domain-agnostic** message types that work with any content. Unlike many queue libraries that assume specific message formats (JSON, Protobuf, etc.), this library treats message bodies as opaque bytes, allowing applications to use any serialization format.
 
-## Core Message Types
+## Core Domain Identifiers
 
-### EventEnvelope Design Requirements
+### QueueName
 
-**Core Message Structure**:
+Validated queue name with length and character restrictions enforced at construction time.
 
-- Unique event identifier for deduplication and tracking
-- GitHub event type classification (pull_request, issues, push, etc.)
-- Repository information for routing and security
-- Entity type and ID for session-based ordering (PR number, issue number, etc.)
-- Optional session ID for ordered processing requirements
+**Type Definition**:
 
-**Message Content Requirements**:
+```rust
+pub struct QueueName(String);
+```
 
-- Raw GitHub webhook payload preservation for downstream processing
-- Processing metadata including timestamps and correlation IDs
-- Optional distributed tracing context for end-to-end monitoring
-- Serializable structure using standard JSON format
+**Validation Rules**:
 
-**Behavioral Requirements**:
+- Length: 1-260 characters
+- Characters: ASCII alphanumeric, hyphens, underscores only
+- No leading/trailing hyphens
+- No consecutive hyphens
 
-- Support correlation key generation for entity-based grouping
-- Enable ordered processing detection based on entity type
-- Provide builder pattern methods for fluent construction
-- Implement QueueMessage trait for provider compatibility
+**Construction**:
 
-### Repository
+```rust
+/// Create new queue name with validation
+pub fn new(name: String) -> Result<Self, ValidationError>;
 
-Repository identification information:
+/// Create queue name with prefix
+pub fn with_prefix(prefix: &str, base_name: &str) -> Result<Self, ValidationError>;
 
-**Repository Data Structure**:
+/// Get queue name as string
+pub fn as_str(&self) -> &str;
+```
 
-- Repository owner (user or organization name)
-- Repository name (excluding owner)
-- Full repository name in format `owner/name`
-- GitHub repository ID for unique identification
-- Repository HTML URL for navigation links
-- Privacy status flag for access control
+**Usage**:
 
-**Repository Construction Requirements**:
+```rust
+use queue_runtime::message::QueueName;
 
-- Support creation from owner/name pairs
-- Support parsing from full repository names
-- Support extraction from GitHub webhook payloads
-- Error handling for malformed repository data
-- Validation of required fields during construction
+// Valid queue names
+let queue1 = QueueName::new("my-queue".to_string())?;
+let queue2 = QueueName::new("customer_orders_v2".to_string())?;
+let queue3 = QueueName::with_prefix("prod", "events")?; // "prod-events"
 
-### EntityType
+// Invalid queue names
+assert!(QueueName::new("".to_string()).is_err());           // Empty
+assert!(QueueName::new("-queue".to_string()).is_err());     // Leading hyphen
+assert!(QueueName::new("queue--name".to_string()).is_err()); // Consecutive hyphens
+assert!(QueueName::new("queue.name".to_string()).is_err()); // Invalid character
+```
 
-Classification of the primary entity involved in an event:
+### MessageId
 
-**Entity Classification Requirements**:
+Unique identifier for messages within the queue system. Generated automatically or parsed from provider-specific message IDs.
 
-- Repository-level events (push, repository settings)
-- Pull request events (opened, closed, synchronized)
-- Issue events (opened, commented, closed)
-- Branch events (created, deleted, protected)
-- Release events (published, edited, deleted)
-- User and organization events (membership changes)
-- Workflow and check events (runs, suites, status)
-- Deployment events (created, status updates)
-- Unknown type as fallback for new GitHub event types
+**Type Definition**:
 
-**Entity Detection Logic**:
+```rust
+pub struct MessageId(String);
+```
 
-- Map GitHub event types to entity classifications
-- Handle related event types (e.g., pull_request_review → PullRequest)
-- Extract entity IDs from GitHub webhook payloads
-- Support branch name normalization (strip refs/heads/ prefix)
-- Default to Unknown for unrecognized event types
+**Construction**:
 
-**Entity ID Extraction Requirements**:
+```rust
+/// Generate new random message ID (UUID v4)
+pub fn new() -> Self;
 
-- Pull request and issue numbers from GitHub payload
-- Release tag names for version identification
-- Branch names with ref prefix normalization
-- Check run and suite IDs for CI/CD tracking
-- Deployment IDs for deployment lifecycle
-- Workflow run IDs for automation tracking
-- Return None for entities without meaningful IDs
+/// Get message ID as string
+pub fn as_str(&self) -> &str;
+```
 
-**Ordering Support Requirements**:
+**Usage**:
 
-- Enable ordered processing for pull requests, issues, and branches
-- Other entity types process without ordering constraints
-- Support session-based message grouping for ordered entities
+```rust
+use queue_runtime::message::MessageId;
+use std::str::FromStr;
 
-**Display Format Requirements**:
+// Generate new ID
+let msg_id = MessageId::new();
 
-- Convert entity types to lowercase string names
-- Match GitHub webhook event naming conventions
+// Parse from string (for provider IDs)
+let msg_id = MessageId::from_str("provider-message-id-12345")?;
+```
 
-### EventMetadata
+### SessionId
 
-Processing and routing metadata for events:
+Identifier for grouping related messages for ordered processing. Session IDs enable FIFO delivery of related messages.
 
-**Metadata Structure Requirements**:
+**Type Definition**:
 
-- Event reception timestamp for processing order
-- Optional processing completion timestamp
-- Event source classification (GitHub webhook, replay, test)
-- GitHub delivery ID from webhook headers for deduplication
-- Webhook signature validation status for security
-- Retry attempt counter for reliability monitoring
-- Matched routing rules list for audit trails
-- Correlation ID for distributed tracing
-- Custom message properties for queue provider features
-- Optional time-to-live for message expiration
-- Optional scheduled enqueue time for delayed processing
-- Cached serialized body for queue provider performance
+```rust
+pub struct SessionId(String);
+```
 
-**Metadata Builder Requirements**:
+**Validation Rules**:
 
-- Fluent builder methods for metadata construction
-- Support delivery ID assignment from webhook headers
-- Support signature validation status tracking
-- Support event source classification
-- Retry count increment for failure tracking
-- Processing completion timestamp marking
+- Required (non-empty)
+- Maximum 128 characters
+- ASCII printable characters only (no control characters)
 
-### EventSource
+**Construction**:
 
-Classification of event origins:
+```rust
+/// Create new session ID with validation
+pub fn new(id: String) -> Result<Self, ValidationError>;
 
-- **GitHub**: Live webhook events from GitHub
-- **Replay**: Re-processed events from audit logs
-- **Test**: Events generated for testing purposes
-- **Manual**: Events created through administrative interfaces
+/// Create session ID from parts (convenience for GitHub events)
+pub fn from_parts(owner: &str, repo: &str, entity_type: &str, entity_id: &str) -> Self;
 
-### TraceContext
+/// Get session ID as string
+pub fn as_str(&self) -> &str;
+```
 
-Distributed tracing context for correlation across services:
+**Usage**:
 
-**W3C Trace Context Requirements**:
+```rust
+use queue_runtime::message::SessionId;
 
-- 128-bit trace ID for unique request identification
-- 64-bit span ID for service-specific operation tracking
-- Trace flags byte for sampling and debug configuration
-- Optional trace state for vendor-specific data
-- Parent span ID for distributed call chain reconstruction
+// Domain-specific session IDs
+let session1 = SessionId::new("order-12345".to_string())?;
+let session2 = SessionId::new("user-alice-cart".to_string())?;
+let session3 = SessionId::new("tenant-123-resource-456".to_string())?;
 
-**Header Integration Requirements**:
+// GitHub event session ID (convenience method)
+let session4 = SessionId::from_parts("owner", "repo", "pr", "42");
+// Produces: "owner/repo/pr/42"
+```
 
-- Parse W3C traceparent header format from HTTP requests
-- Generate new span IDs while preserving trace ID
-- Convert trace context to HTTP headers for downstream calls
-- Support trace state propagation for observability tools
-- Handle malformed headers gracefully with fallbacks
+### ReceiptHandle
+
+Opaque token for acknowledging or rejecting received messages. Contains provider-specific data and expiration tracking.
+
+**Type Definition**:
+
+```rust
+pub struct ReceiptHandle {
+    handle: String,
+    expires_at: Timestamp,
+    provider_type: ProviderType,
+}
+```
+
+**Construction**:
+
+```rust
+/// Create new receipt handle
+pub fn new(handle: String, expires_at: Timestamp, provider_type: ProviderType) -> Self;
+
+/// Get handle string
+pub fn handle(&self) -> &str;
+
+/// Check if receipt handle is expired
+pub fn is_expired(&self) -> bool;
+
+/// Get provider type
+pub fn provider_type(&self) -> ProviderType;
+```
+
+**Usage**:
+
+```rust
+use queue_runtime::message::ReceiptHandle;
+
+// Receipt handles are created by providers when receiving messages
+// Applications use them for acknowledgment operations
+let receipt = /* received from provider */;
+
+if receipt.is_expired() {
+    eprintln!("Receipt handle expired, message may be redelivered");
+}
+
+// Use receipt to complete, abandon, or dead-letter message
+client.complete_message(receipt).await?;
+```
+
+### Timestamp
+
+Wrapper for consistent time handling across the library. Uses UTC timezone for all timestamps.
+
+**Type Definition**:
+
+```rust
+pub struct Timestamp(DateTime<Utc>);
+```
+
+**Construction**:
+
+```rust
+/// Create timestamp for current time
+pub fn now() -> Self;
+
+/// Create timestamp from DateTime
+pub fn from_datetime(dt: DateTime<Utc>) -> Self;
+
+/// Get underlying DateTime
+pub fn as_datetime(&self) -> DateTime<Utc>;
+```
+
+**Usage**:
+
+```rust
+use queue_runtime::message::Timestamp;
+use chrono::Utc;
+
+let now = Timestamp::now();
+let future = Timestamp::from_datetime(Utc::now() + Duration::hours(2));
+
+// Timestamps are comparable
+assert!(now < future);
+```
+
+## Message Types
+
+### Message
+
+A message to be sent through the queue system. Messages are domain-agnostic - the body is opaque bytes, allowing any serialization format.
+
+**Type Definition**:
+
+```rust
+pub struct Message {
+    pub body: Bytes,
+    pub attributes: HashMap<String, String>,
+    pub session_id: Option<SessionId>,
+    pub correlation_id: Option<String>,
+    pub time_to_live: Option<Duration>,
+}
+```
+
+**Fields**:
+
+- **body**: Message payload as bytes (any format: JSON, Protobuf, binary, etc.)
+- **attributes**: Key-value metadata for routing, filtering, tracing
+- **session_id**: Optional session ID for ordered processing
+- **correlation_id**: Optional ID for request/response patterns and distributed tracing
+- **time_to_live**: Optional TTL for automatic message expiration
+
+**Construction**:
+
+```rust
+/// Create new message with body
+pub fn new(body: Bytes) -> Self;
+
+/// Add session ID for ordered processing
+pub fn with_session_id(mut self, session_id: SessionId) -> Self;
+
+/// Add message attribute
+pub fn with_attribute(mut self, key: String, value: String) -> Self;
+
+/// Add correlation ID for tracking
+pub fn with_correlation_id(mut self, correlation_id: String) -> Self;
+
+/// Add time-to-live for message expiration
+pub fn with_ttl(mut self, ttl: Duration) -> Self;
+```
+
+**Usage**:
+
+```rust
+use queue_runtime::message::{Message, SessionId};
+use bytes::Bytes;
+use chrono::Duration;
+
+// Simple message
+let msg1 = Message::new(Bytes::from("Hello, World!"));
+
+// Message with session for ordered processing
+let session = SessionId::new("order-123".to_string())?;
+let msg2 = Message::new(Bytes::from(b"order data".to_vec()))
+    .with_session_id(session)
+    .with_correlation_id("request-456".to_string())
+    .with_attribute("priority".to_string(), "high".to_string())
+    .with_ttl(Duration::hours(24));
+
+// Serialize your domain objects to bytes
+use serde_json;
+let order = /* your domain struct */;
+let json_bytes = Bytes::from(serde_json::to_vec(&order)?);
+let msg3 = Message::new(json_bytes);
+```
+
+**Serialization**:
+
+```rust
+// Message implements Serialize/Deserialize for storage/transmission
+// Body bytes are base64-encoded in JSON serialization
+let json = serde_json::to_string(&message)?;
+let message: Message = serde_json::from_str(&json)?;
+```
+
+### ReceivedMessage
+
+A message received from the queue with processing metadata. Contains all original message data plus delivery tracking information.
+
+**Type Definition**:
+
+```rust
+pub struct ReceivedMessage {
+    pub message_id: MessageId,
+    pub body: Bytes,
+    pub attributes: HashMap<String, String>,
+    pub session_id: Option<SessionId>,
+    pub correlation_id: Option<String>,
+    pub receipt_handle: ReceiptHandle,
+    pub delivery_count: u32,
+    pub first_delivered_at: Timestamp,
+    pub delivered_at: Timestamp,
+}
+```
+
+**Fields**:
+
+- **message_id**: Unique identifier assigned by provider
+- **body**: Message payload bytes
+- **attributes**: Message metadata
+- **session_id**: Session ID if message is part of ordered session
+- **correlation_id**: Correlation ID for tracing
+- **receipt_handle**: Token for acknowledgment operations
+- **delivery_count**: Number of times message has been delivered (for retry logic)
+- **first_delivered_at**: When message was first delivered to any consumer
+- **delivered_at**: When message was delivered to this consumer
+
+**Operations**:
+
+```rust
+/// Convert back to Message (for forwarding/replaying)
+pub fn message(&self) -> Message;
+
+/// Check if message has exceeded maximum delivery count
+pub fn has_exceeded_max_delivery_count(&self, max_count: u32) -> bool;
+```
+
+**Usage**:
+
+```rust
+use queue_runtime::message::ReceivedMessage;
+
+// Receive message from queue
+let received = client.receive_message(&queue, timeout).await?;
+
+if let Some(msg) = received {
+    println!("Message ID: {}", msg.message_id);
+    println!("Delivery count: {}", msg.delivery_count);
+
+    // Check for poison messages (too many retries)
+    if msg.has_exceeded_max_delivery_count(5) {
+        // Send to dead letter queue
+        client.dead_letter_message(
+            msg.receipt_handle,
+            format!("Max delivery count exceeded: {}", msg.delivery_count)
+        ).await?;
+    } else {
+        // Process message
+        process(&msg.body)?;
+
+        // Mark as complete
+        client.complete_message(msg.receipt_handle).await?;
+    }
+}
+```
+
+**Forwarding/Replaying Messages**:
+
+```rust
+// Convert received message back to sendable message
+let new_message = received.message()
+    .with_attribute("replayed".to_string(), "true".to_string());
+
+// Send to different queue
+client.send_message(&other_queue, new_message).await?;
+```
 
 ## Serialization Support
 
-### MessageSerializer
+### Message Serialization
 
-**Message Serialization Requirements**:
+Messages implement `Serialize` and `Deserialize` for persistence and transmission.
 
-- JSON serialization for cross-platform compatibility
-- Binary data support for efficient queue transport
-- Error handling with detailed failure information
-- Performance optimization through cached serialized bodies
-- Generic type support for different message types
+**Body Encoding**:
 
-**EventEnvelope Serialization Requirements**:
+- Message bodies (bytes) are base64-encoded in JSON format
+- Prevents JSON escaping issues with binary data
+- Ensures safe transmission over text-based protocols
 
-- Specialized handling for EventEnvelope structures
-- Cached serialized body population for performance
-- Deserialization with body cache reconstruction
-- Validation of required fields during deserialization
+**Example**:
 
-### Message Validation
+```rust
+use queue_runtime::message::Message;
+use bytes::Bytes;
+use serde_json;
 
-**Validation Requirements**:
+let message = Message::new(Bytes::from(vec![0x01, 0x02, 0x03, 0xFF]));
 
-- Required field validation (event ID, event type, repository)
-- Session ID format and length constraints (max 128 characters)
-- Trace context W3C format validation
-- Repository full name format validation
-- Entity ID format validation when present
-- Payload structure validation for known event types
-- Error reporting with specific field and reason information
+// Serialize to JSON
+let json = serde_json::to_string(&message)?;
+// Body is base64-encoded: {"body":"AQIDBP//","attributes":{},...}
 
-**Trace Context Validation Requirements**:
+// Deserialize from JSON
+let message: Message = serde_json::from_str(&json)?;
+assert_eq!(message.body, Bytes::from(vec![0x01, 0x02, 0x03, 0xFF]));
+```
 
-- Trace ID format validation (32-character hex string)
-- Span ID format validation (16-character hex string)
-- Trace flags validation for W3C compliance
-- Graceful error handling for malformed trace data
+### Domain Object Serialization
 
-## Error Types
+Applications serialize domain objects before creating messages:
 
-**MessageError Classifications**:
+```rust
+use serde::{Serialize, Deserialize};
+use bytes::Bytes;
 
-- **SerializationFailed**: JSON serialization errors with underlying cause
-- **DeserializationFailed**: JSON parsing errors with detailed information
-- **MissingField**: Required field absent from message structure
-- **ValidationFailed**: Field validation errors with specific reasons
-- **InvalidRepositoryName**: Malformed repository name format
-- **InvalidEntityType**: Unrecognized entity type classification
-- **InvalidTraceContext**: W3C trace context format violations
-- **MessageTooLarge**: Message exceeds size limits for queue provider
+#[derive(Serialize, Deserialize)]
+struct OrderEvent {
+    order_id: String,
+    customer_id: String,
+    total: f64,
+}
 
-## Usage Patterns
+// Serialize domain object to bytes
+let event = OrderEvent {
+    order_id: "order-123".to_string(),
+    customer_id: "customer-456".to_string(),
+    total: 99.99,
+};
 
-### Message Creation Workflow
+let json_bytes = Bytes::from(serde_json::to_vec(&event)?);
+let message = Message::new(json_bytes);
 
-**EventEnvelope Construction**:
-1. Create repository information from owner/name
-2. Construct envelope with event type and GitHub payload
-3. Extract entity type and ID from payload content
-4. Generate session ID for ordered processing entities
-5. Add distributed tracing context for observability
-6. Validate message structure and required fields
-7. Serialize for queue transmission
+// Send message
+client.send_message(&queue, message).await?;
 
-### Message Processing Workflow
+// Receive and deserialize
+let received = client.receive_message(&queue, timeout).await?;
+if let Some(msg) = received {
+    let event: OrderEvent = serde_json::from_slice(&msg.body)?;
+    println!("Order: {} for customer {}", event.order_id, event.customer_id);
+}
+```
 
-**EventEnvelope Processing**:
-1. Deserialize message from queue provider
-2. Validate message structure and field constraints
-3. Route based on event type and entity classification
-4. Extract entity-specific data from GitHub payload
-5. Process event according to business logic requirements
+## Message Validation
 
-### Trace Context Integration Patterns
+### Validation Errors
 
-**Trace Propagation Requirements**:
+The module defines validation errors for invalid identifiers:
 
-- Extract trace context from incoming HTTP headers using W3C format
-- Attach trace context to EventEnvelope for end-to-end correlation
-- Propagate trace headers to downstream service calls
-- Handle missing trace context with new trace generation
+```rust
+pub enum ValidationError {
+    Required { field: String },
+    OutOfRange { field: String, message: String },
+    InvalidFormat { field: String, message: String },
+}
+```
 
-## Testing Support
+**Validation Rules**:
 
-**Test Builder Requirements**:
+- **QueueName**: 1-260 characters, ASCII alphanumeric/hyphens/underscores, no leading/trailing hyphens
+- **MessageId**: Non-empty string
+- **SessionId**: Non-empty, max 128 characters, ASCII printable only
 
-- Fluent builder pattern for test EventEnvelope construction
-- Pre-configured templates for common event types (pull request, issue)
-- Repository configuration support for different test scenarios
-- Session ID and trace context injection for integration testing
-- Sample event generators for consistent test data
+**Usage**:
 
-## Performance Characteristics
+```rust
+use queue_runtime::message::{QueueName, ValidationError};
 
-- **Serialization**: ~1-3ms for typical GitHub event (5-50KB)
-- **Deserialization**: ~2-5ms for typical GitHub event
-- **Validation**: ~0.1-0.5ms per message
-- **Memory Usage**: ~2-10KB per EventEnvelope in memory
-- **Trace Context Overhead**: ~50-100 bytes per message
-- **Session Key Generation**: ~0.01ms per message
+match QueueName::new("invalid..name".to_string()) {
+    Ok(queue) => { /* use queue */ }
+    Err(ValidationError::InvalidFormat { field, message }) => {
+        eprintln!("Invalid {}: {}", field, message);
+    }
+    Err(e) => {
+        eprintln!("Validation error: {:?}", e);
+    }
+}
+```
+
+## Design Principles
+
+### Domain-Agnostic Design
+
+This module is intentionally **not specific** to GitHub events or any particular domain:
+
+- **Body is Bytes**: Applications choose their own serialization (JSON, Protobuf, CBOR, etc.)
+- **No Envelope Assumptions**: No assumed structure beyond basic queue message fields
+- **Generic Attributes**: Key-value attributes work for any metadata
+- **Flexible Session IDs**: Session IDs can be structured for any domain
+
+### Type Safety
+
+- **Branded Types**: QueueName, MessageId, SessionId are distinct types (not just strings)
+- **Validation at Construction**: Invalid values rejected immediately
+- **No Runtime Surprises**: Validation errors at construction time, not during queue operations
+
+### Provider Compatibility
+
+- **ReceiptHandle**: Encapsulates provider-specific data while providing common interface
+- **Timestamp**: Consistent UTC time handling across providers
+- **Expiration Tracking**: Built-in support for message and receipt handle expiration
+
+## Behavioral Assertions
+
+### QueueName Assertions
+
+1. **Valid names must be 1-260 characters**: Empty or too-long names rejected
+2. **Only alphanumeric, hyphens, underscores allowed**: Special characters rejected
+3. **No leading/trailing hyphens**: Hyphen placement validated
+4. **No consecutive hyphens**: Double-hyphens rejected
+
+### SessionId Assertions
+
+1. **Non-empty session IDs required**: Empty strings rejected
+2. **Maximum 128 characters**: Longer session IDs rejected
+3. **ASCII printable only**: Control characters and non-ASCII rejected
+
+### Message Assertions
+
+1. **Body preserved exactly**: Bytes sent == bytes received (no encoding corruption)
+2. **Attributes preserved**: Key-value metadata transmitted unchanged
+3. **Session ID preserved**: Session grouping maintained through queue
+
+### ReceivedMessage Assertions
+
+1. **delivery_count >= 1**: Message delivered at least once
+2. **delivered_at >= first_delivered_at**: Current delivery after or equal to first
+3. **receipt_handle not expired initially**: Receipt valid when message received
+4. **message() preserves body**: Converted message has same body as received
+
+## Testing Strategy
+
+### Unit Testing
+
+- Test validation rules for all domain identifiers
+- Test message construction with builder pattern
+- Test serialization round-trips (Message -> JSON -> Message)
+- Test receipt handle expiration logic
+
+### Property-Based Testing
+
+- QueueName validation with property tests (generate random strings)
+- SessionId character restrictions with property tests
+- Message serialization with arbitrary bytes
+
+### Integration Testing
+
+- Test message transmission through real queue providers
+- Verify body preservation across providers
+- Test attribute handling across providers
+- Verify session ID propagation

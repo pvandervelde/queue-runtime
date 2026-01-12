@@ -1,586 +1,636 @@
-# Session Strategies
+# Session Management Module
 
-This document defines the session management strategies for ordered message processing across different bot types and GitHub event patterns.
+The session management module provides a **generic, domain-agnostic** framework for session key generation that enables ordered message processing for any application domain.
 
 ## Overview
 
-Session strategies determine how messages are grouped for ordered processing. Different bots have different ordering requirements based on their functionality and the GitHub events they handle.
+**Critical Design Principle**: This module is intentionally **NOT GitHub-specific**. It provides infrastructure for session-based ordering without assuming any specific message structure or business domain (GitHub events, e-commerce orders, IoT telemetry, financial transactions, etc.).
 
-## Session Strategy Types
+The module provides:
 
-### 1. No Ordering (None)
+1. **SessionKeyExtractor**: Trait for messages to expose metadata
+2. **SessionKeyGenerator**: Strategy trait for generating session keys
+3. **Pre-built Strategies**: Common patterns for session key generation
+4. **Composable Design**: Strategies can be combined and chained
 
-Messages are processed without any ordering guarantees. Suitable for stateless operations.
+## Core Concepts
 
-**Use Cases:**
+### Session Keys
 
-- Notification bots
-- Simple webhook forwarders
-- Stateless analysis tools
+Session keys are strings that group related messages for FIFO ordered processing. Messages with the same session key are guaranteed to be delivered in the order they were sent.
 
-**Implementation:**
+**Session Key Purpose**:
+
+- Group related messages (e.g., all orders for a customer)
+- Ensure FIFO delivery within each group
+- Allow concurrent processing of different groups
+- Provide ordering semantics application can rely on
+
+**Example Session Keys**:
+
+- `order-12345` - All events for order 12345
+- `user-alice-cart` - All cart events for user Alice
+- `tenant-123-resource-456` - All resource events for tenant 123's resource 456
+- `github/owner/repo/pr/42` - All events for PR #42 in owner/repo
+
+### No Ordering
+
+Returning `None` from a session key generator allows **concurrent processing** without ordering constraints. Use for stateless operations that don't require message ordering.
+
+## Core Traits
+
+### SessionKeyExtractor
+
+Trait for extracting metadata from messages. Messages implement this trait to expose data that session key generators can use.
+
+**Trait Definition**:
 
 ```rust
-pub struct NoOrderingStrategy;
+pub trait SessionKeyExtractor {
+    /// Get a metadata value by key
+    ///
+    /// Returns `None` if the key doesn't exist or has no value
+    fn get_metadata(&self, key: &str) -> Option<String>;
 
-impl SessionKeyGenerator for NoOrderingStrategy {
-    fn generate_key(&self, _envelope: &EventEnvelope) -> Option<String> {
-        None // No session key = no ordering
+    /// List all available metadata keys for this message
+    ///
+    /// Useful for debugging and introspection
+    fn list_metadata_keys(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Get all metadata as a map (optional, for bulk operations)
+    fn get_all_metadata(&self) -> HashMap<String, String> {
+        /* default implementation provided */
     }
 }
 ```
 
-### 2. Entity-Based Ordering
+**Design Philosophy**:
 
-Messages are ordered by specific entities (PR, Issue, Branch). Each entity gets its own session.
+- **Key-Value Interface**: Messages expose named fields without assuming structure
+- **No Assumptions**: Works with any message type or domain
+- **Pull-Based**: Generators query for data they need
 
-**Use Cases:**
-
-- Pull request automation
-- Issue lifecycle management
-- Branch protection enforcement
-
-**Session Keys:**
-
-- Pull Request: `pr-{repo_full_name}-{pr_number}`
-- Issue: `issue-{repo_full_name}-{issue_number}`
-- Branch: `branch-{repo_full_name}-{branch_name}`
-
-**Implementation:**
+**Example Implementation** (E-commerce):
 
 ```rust
-pub struct EntitySessionStrategy;
+use queue_runtime::sessions::SessionKeyExtractor;
 
-impl SessionKeyGenerator for EntitySessionStrategy {
-    fn generate_key(&self, envelope: &EventEnvelope) -> Option<String> {
-        match (&envelope.entity_type, &envelope.entity_id) {
-            (EntityType::PullRequest, Some(pr_number)) => {
-                Some(format!("pr-{}-{}", envelope.repository.full_name, pr_number))
-            }
-            (EntityType::Issue, Some(issue_number)) => {
-                Some(format!("issue-{}-{}", envelope.repository.full_name, issue_number))
-            }
-            (EntityType::Branch, Some(branch_name)) => {
-                Some(format!("branch-{}-{}", envelope.repository.full_name, branch_name))
-            }
-            _ => None, // Fall back to no ordering for unsupported entities
+struct OrderEvent {
+    order_id: String,
+    customer_id: String,
+    warehouse_id: String,
+    timestamp: DateTime<Utc>,
+}
+
+impl SessionKeyExtractor for OrderEvent {
+    fn get_metadata(&self, key: &str) -> Option<String> {
+        match key {
+            "order_id" => Some(self.order_id.clone()),
+            "customer_id" => Some(self.customer_id.clone()),
+            "warehouse_id" => Some(self.warehouse_id.clone()),
+            "timestamp" => Some(self.timestamp.to_rfc3339()),
+            _ => None,
+        }
+    }
+
+    fn list_metadata_keys(&self) -> Vec<String> {
+        vec![
+            "order_id".to_string(),
+            "customer_id".to_string(),
+            "warehouse_id".to_string(),
+            "timestamp".to_string(),
+        ]
+    }
+}
+```
+
+**Example Implementation** (IoT):
+
+```rust
+struct TelemetryEvent {
+    device_id: String,
+    sensor_type: String,
+    reading: f64,
+}
+
+impl SessionKeyExtractor for TelemetryEvent {
+    fn get_metadata(&self, key: &str) -> Option<String> {
+        match key {
+            "device_id" => Some(self.device_id.clone()),
+            "sensor_type" => Some(self.sensor_type.clone()),
+            "reading" => Some(self.reading.to_string()),
+            _ => None,
         }
     }
 }
 ```
 
-### 3. Repository-Based Ordering
+### SessionKeyGenerator
 
-All messages for a repository are processed in order. Ensures repository-level consistency.
+Strategy trait for generating session keys from message metadata. Different implementations provide different ordering semantics.
 
-**Use Cases:**
-
-- Repository-wide policy enforcement
-- Dependency management
-- Security scanning coordination
-
-**Session Key:**
-
-- Repository: `repo-{repo_full_name}`
-
-**Implementation:**
+**Trait Definition**:
 
 ```rust
-pub struct RepositorySessionStrategy;
+pub trait SessionKeyGenerator: Send + Sync {
+    /// Generate a session key for the given message
+    ///
+    /// Returns `None` if the message should not be session-ordered,
+    /// allowing concurrent processing without ordering constraints
+    fn generate_key(&self, extractor: &dyn SessionKeyExtractor) -> Option<SessionId>;
+}
+```
 
-impl SessionKeyGenerator for RepositorySessionStrategy {
-    fn generate_key(&self, envelope: &EventEnvelope) -> Option<String> {
-        Some(format!("repo-{}", envelope.repository.full_name))
+**Design Principles**:
+
+- **Strategy Pattern**: Different strategies provide different grouping semantics
+- **Optional Ordering**: Returning `None` allows concurrent processing
+- **Composable**: Strategies can be combined (see FallbackStrategy)
+- **Thread-Safe**: `Send + Sync` for use in async contexts
+
+**Example Implementation**:
+
+```rust
+use queue_runtime::sessions::{SessionKeyGenerator, SessionKeyExtractor};
+use queue_runtime::message::SessionId;
+
+struct OrderSessionStrategy;
+
+impl SessionKeyGenerator for OrderSessionStrategy {
+    fn generate_key(&self, extractor: &dyn SessionKeyExtractor) -> Option<SessionId> {
+        extractor.get_metadata("order_id")
+            .and_then(|id| SessionId::new(format!("order-{}", id)).ok())
     }
 }
 ```
 
-### 4. User-Based Ordering
+## Pre-Built Strategies
 
-Messages are ordered by the user who triggered the event. Useful for user-specific workflows.
+### SingleFieldStrategy
 
-**Use Cases:**
+Generates session keys from a single metadata field with optional prefix.
 
-- User activity tracking
-- Personal automation workflows
-- User-specific rate limiting
+**Use Cases**:
 
-**Session Key:**
+- Order by entity ID
+- Group by user ID
+- Partition by tenant ID
 
-- User: `user-{repo_full_name}-{username}`
-
-**Implementation:**
+**Construction**:
 
 ```rust
-pub struct UserSessionStrategy;
-
-impl SessionKeyGenerator for UserSessionStrategy {
-    fn generate_key(&self, envelope: &EventEnvelope) -> Option<String> {
-        envelope.payload
-            .get("sender")
-            .and_then(|sender| sender.get("login"))
-            .and_then(|login| login.as_str())
-            .map(|username| format!("user-{}-{}", envelope.repository.full_name, username))
-    }
-}
+/// Create single field strategy
+pub fn new(field_name: &str, prefix: Option<&str>) -> Self;
 ```
 
-### 5. Hybrid Strategies
-
-Combinations of multiple strategies for complex ordering requirements.
-
-#### Entity-Repository Hybrid
-
-Entities get priority ordering, with repository-level fallback:
+**Example**:
 
 ```rust
-pub struct EntityRepositoryHybridStrategy;
+use queue_runtime::sessions::SingleFieldStrategy;
 
-impl SessionKeyGenerator for EntityRepositoryHybridStrategy {
-    fn generate_key(&self, envelope: &EventEnvelope) -> Option<String> {
-        // Try entity-based first
-        if let Some(entity_key) = EntitySessionStrategy.generate_key(envelope) {
-            Some(entity_key)
-        } else {
-            // Fall back to repository-based
-            RepositorySessionStrategy.generate_key(envelope)
+// Session keys like "order-12345"
+let strategy = SingleFieldStrategy::new("order_id", Some("order"));
+
+// Session keys like "12345" (no prefix)
+let strategy = SingleFieldStrategy::new("order_id", None);
+```
+
+**Behavior**:
+
+- Extracts single field from message
+- Adds optional prefix
+- Returns `None` if field is missing
+- Validates session ID format
+
+**Usage Scenarios**:
+
+```rust
+// E-commerce: Order by customer
+let customer_strategy = SingleFieldStrategy::new("customer_id", Some("customer"));
+
+// IoT: Order by device
+let device_strategy = SingleFieldStrategy::new("device_id", Some("device"));
+
+// Multi-tenant: Order by tenant
+let tenant_strategy = SingleFieldStrategy::new("tenant_id", Some("tenant"));
+```
+
+### CompositeKeyStrategy
+
+Generates session keys by composing multiple metadata fields with a separator.
+
+**Use Cases**:
+
+- Hierarchical grouping (tenant + resource)
+- Multi-dimensional ordering (region + customer)
+- Compound keys (owner + repo + entity)
+
+**Construction**:
+
+```rust
+/// Create composite key strategy
+pub fn new(fields: Vec<String>, separator: &str) -> Self;
+```
+
+**Example**:
+
+```rust
+use queue_runtime::sessions::CompositeKeyStrategy;
+
+// Session keys like "tenant-123-resource-456"
+let strategy = CompositeKeyStrategy::new(
+    vec!["tenant_id".to_string(), "resource_id".to_string()],
+    "-"
+);
+
+// Session keys like "us-west-2/customer-789"
+let strategy = CompositeKeyStrategy::new(
+    vec!["region".to_string(), "customer_id".to_string()],
+    "/"
+);
+```
+
+**Behavior**:
+
+- Extracts all specified fields in order
+- Returns `None` if ANY field is missing
+- Joins field values with separator
+- Validates final session ID format
+
+**Usage Scenarios**:
+
+```rust
+// Multi-tenant SaaS: tenant + user
+let strategy = CompositeKeyStrategy::new(
+    vec!["tenant_id".to_string(), "user_id".to_string()],
+    "-"
+);
+
+// E-commerce: warehouse + order
+let strategy = CompositeKeyStrategy::new(
+    vec!["warehouse_id".to_string(), "order_id".to_string()],
+    "-"
+);
+
+// GitHub events: owner + repo + entity_type + entity_id
+let strategy = CompositeKeyStrategy::new(
+    vec!["owner".to_string(), "repo".to_string(), "entity_type".to_string(), "entity_id".to_string()],
+    "/"
+);
+```
+
+### NoOrderingStrategy
+
+Disables session-based ordering, allowing all messages to be processed concurrently.
+
+**Use Cases**:
+
+- Stateless operations
+- Notification delivery
+- Independent message processing
+- High-throughput scenarios
+
+**Example**:
+
+```rust
+use queue_runtime::sessions::NoOrderingStrategy;
+
+let strategy = NoOrderingStrategy;
+
+// Always returns None - no ordering
+let session_id = strategy.generate_key(&message); // None
+```
+
+**Behavior**:
+
+- Always returns `None`
+- All messages can be processed concurrently
+- No ordering guarantees
+- Maximum throughput
+
+### FallbackStrategy
+
+Tries multiple generators in order, using the first success. Provides fine-grained ordering with coarser fallbacks.
+
+**Use Cases**:
+
+- Entity-level ordering with repository fallback
+- Specific-to-general ordering hierarchies
+- Graceful degradation of ordering
+
+**Construction**:
+
+```rust
+/// Create fallback strategy with ordered generators
+pub fn new(generators: Vec<Box<dyn SessionKeyGenerator>>) -> Self;
+```
+
+**Example**:
+
+```rust
+use queue_runtime::sessions::{FallbackStrategy, SingleFieldStrategy, CompositeKeyStrategy};
+
+// Try order-specific key, fall back to customer-level key
+let primary = SingleFieldStrategy::new("order_id", Some("order"));
+let fallback = SingleFieldStrategy::new("customer_id", Some("customer"));
+
+let strategy = FallbackStrategy::new(vec![
+    Box::new(primary),
+    Box::new(fallback),
+]);
+```
+
+**Behavior**:
+
+- Tries each generator in order
+- Returns first non-None result
+- Returns None if all generators return None
+- Allows fine-grained ordering with coarse fallback
+
+**Usage Scenarios**:
+
+```rust
+// E-commerce: Order by line item, fall back to order, fall back to customer
+let strategy = FallbackStrategy::new(vec![
+    Box::new(SingleFieldStrategy::new("line_item_id", Some("item"))),
+    Box::new(SingleFieldStrategy::new("order_id", Some("order"))),
+    Box::new(SingleFieldStrategy::new("customer_id", Some("customer"))),
+]);
+
+// GitHub: PR-specific, fall back to repo-level
+let strategy = FallbackStrategy::new(vec![
+    Box::new(CompositeKeyStrategy::new(
+        vec!["owner".to_string(), "repo".to_string(), "pr_number".to_string()],
+        "/"
+    )),
+    Box::new(CompositeKeyStrategy::new(
+        vec!["owner".to_string(), "repo".to_string()],
+        "/"
+    )),
+]);
+```
+
+## Usage Patterns
+
+### Basic Usage
+
+```rust
+use queue_runtime::sessions::{SessionKeyGenerator, SessionKeyExtractor, SingleFieldStrategy};
+use queue_runtime::message::{Message, SessionId};
+use bytes::Bytes;
+
+// Your domain message type
+struct OrderEvent {
+    order_id: String,
+    data: Vec<u8>,
+}
+
+// Implement metadata extraction
+impl SessionKeyExtractor for OrderEvent {
+    fn get_metadata(&self, key: &str) -> Option<String> {
+        match key {
+            "order_id" => Some(self.order_id.clone()),
+            _ => None,
         }
     }
 }
-```
 
-#### Time-Based Partitioning
+// Create strategy
+let strategy = SingleFieldStrategy::new("order_id", Some("order"));
 
-Partition sessions by time periods to prevent hot sessions:
-
-```rust
-pub struct TimePartitionedEntityStrategy {
-    partition_duration: Duration,
-}
-
-impl SessionKeyGenerator for TimePartitionedEntityStrategy {
-    fn generate_key(&self, envelope: &EventEnvelope) -> Option<String> {
-        let entity_key = EntitySessionStrategy.generate_key(envelope)?;
-
-        // Add time partition to spread load
-        let partition = envelope.metadata.received_at.timestamp() / self.partition_duration.as_secs() as i64;
-
-        Some(format!("{}-p{}", entity_key, partition))
-    }
-}
-```
-
-## Bot-Specific Strategy Configuration
-
-### Task Tactician
-
-Handles task automation and requires entity-level ordering:
-
-```rust
-pub fn task_tactician_strategy() -> Box<dyn SessionKeyGenerator> {
-    Box::new(EntitySessionStrategy)
-}
-
-// Configuration
-let config = BotSessionConfig {
-    strategy: SessionStrategyType::Entity,
-    max_session_duration: Duration::from_hours(2),
-    max_messages_per_session: 1000,
-    session_timeout: Duration::from_minutes(30),
-};
-```
-
-**Ordering Requirements:**
-
-- Pull request events must be processed in sequence
-- Issue events must maintain temporal order
-- Branch events should be ordered per branch
-
-### Merge Warden
-
-Manages PR merging and requires strict PR ordering:
-
-```rust
-pub fn merge_warden_strategy() -> Box<dyn SessionKeyGenerator> {
-    Box::new(EntitySessionStrategy)
-}
-
-// Configuration
-let config = BotSessionConfig {
-    strategy: SessionStrategyType::Entity,
-    max_session_duration: Duration::from_hours(1),
-    max_messages_per_session: 500,
-    session_timeout: Duration::from_minutes(15),
-};
-```
-
-**Ordering Requirements:**
-
-- PR state changes must be sequential
-- Merge/close operations must not race
-- Review events must be ordered
-
-### Spec Sentinel
-
-Validates specifications and can use repository-level ordering:
-
-```rust
-pub fn spec_sentinel_strategy() -> Box<dyn SessionKeyGenerator> {
-    Box::new(RepositorySessionStrategy)
-}
-
-// Configuration
-let config = BotSessionConfig {
-    strategy: SessionStrategyType::Repository,
-    max_session_duration: Duration::from_hours(4),
-    max_messages_per_session: 2000,
-    session_timeout: Duration::from_hours(1),
-};
-```
-
-**Ordering Requirements:**
-
-- Repository-wide consistency for spec validation
-- File change events should be coordinated
-- Less strict ordering requirements than PR bots
-
-## Session Management Implementation
-
-### SessionManager
-
-Central coordinator for session key generation and management:
-
-```rust
-use std::collections::HashMap;
-
-pub struct SessionManager {
-    strategies: HashMap<String, Box<dyn SessionKeyGenerator>>,
-    default_strategy: Box<dyn SessionKeyGenerator>,
-}
-
-impl SessionManager {
-    pub fn new() -> Self {
-        Self {
-            strategies: HashMap::new(),
-            default_strategy: Box::new(NoOrderingStrategy),
-        }
-    }
-
-    pub fn register_bot_strategy(&mut self, bot_name: String, strategy: Box<dyn SessionKeyGenerator>) {
-        self.strategies.insert(bot_name, strategy);
-    }
-
-    pub fn generate_session_key(&self, bot_name: &str, envelope: &EventEnvelope) -> Option<String> {
-        let strategy = self.strategies
-            .get(bot_name)
-            .unwrap_or(&self.default_strategy);
-
-        strategy.generate_key(envelope)
-    }
-
-    pub fn supports_ordering(&self, bot_name: &str, envelope: &EventEnvelope) -> bool {
-        self.generate_session_key(bot_name, envelope).is_some()
-    }
-}
-
-// Factory function for standard bot strategies
-pub fn create_standard_session_manager() -> SessionManager {
-    let mut manager = SessionManager::new();
-
-    // Register standard bot strategies
-    manager.register_bot_strategy(
-        "task-tactician".to_string(),
-        Box::new(EntitySessionStrategy)
-    );
-
-    manager.register_bot_strategy(
-        "merge-warden".to_string(),
-        Box::new(EntitySessionStrategy)
-    );
-
-    manager.register_bot_strategy(
-        "spec-sentinel".to_string(),
-        Box::new(RepositorySessionStrategy)
-    );
-
-    manager.register_bot_strategy(
-        "security-scanner".to_string(),
-        Box::new(RepositorySessionStrategy)
-    );
-
-    manager.register_bot_strategy(
-        "dependency-updater".to_string(),
-        Box::new(EntityRepositoryHybridStrategy)
-    );
-
-    manager
-}
-```
-
-### Session Configuration
-
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BotSessionConfig {
-    /// Strategy type for session key generation
-    pub strategy: SessionStrategyType,
-
-    /// Maximum duration a session can be active
-    pub max_session_duration: Duration,
-
-    /// Maximum number of messages per session
-    pub max_messages_per_session: u32,
-
-    /// Timeout for inactive sessions
-    pub session_timeout: Duration,
-
-    /// Whether to enable session affinity (same consumer for session)
-    pub enable_session_affinity: bool,
-
-    /// Custom strategy parameters
-    pub strategy_params: HashMap<String, String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum SessionStrategyType {
-    None,
-    Entity,
-    Repository,
-    User,
-    EntityRepositoryHybrid,
-    TimePartitionedEntity { partition_minutes: u32 },
-    Custom { class_name: String },
-}
-
-impl Default for BotSessionConfig {
-    fn default() -> Self {
-        Self {
-            strategy: SessionStrategyType::Entity,
-            max_session_duration: Duration::from_hours(2),
-            max_messages_per_session: 1000,
-            session_timeout: Duration::from_minutes(30),
-            enable_session_affinity: true,
-            strategy_params: HashMap::new(),
-        }
-    }
-}
-```
-
-## Provider-Specific Implementation
-
-### Azure Service Bus Sessions
-
-Azure Service Bus has native session support:
-
-```rust
-impl AzureServiceBusClient {
-    async fn send_with_session(&self, queue_name: &str, message: &EventEnvelope, session_id: &str) -> Result<MessageId, AzureError> {
-        let session_message = ServiceBusMessage::new(MessageSerializer::serialize(message)?)
-            .with_session_id(session_id)
-            .with_message_id(&message.event_id);
-
-        self.sender.send_message(session_message).await
-            .map_err(AzureError::from)
-    }
-
-    async fn receive_from_session(&self, queue_name: &str, session_id: &str) -> Result<Vec<ReceivedMessage<EventEnvelope, AzureReceipt>>, AzureError> {
-        let session_receiver = self.client
-            .accept_session(queue_name, session_id)
-            .await?;
-
-        let messages = session_receiver
-            .receive_messages(10)
-            .await?;
-
-        // Convert to our message format
-        messages.into_iter()
-            .map(|msg| self.convert_received_message(msg))
-            .collect()
-    }
-}
-```
-
-### AWS SQS FIFO Queues
-
-AWS SQS uses MessageGroupId for ordering:
-
-```rust
-impl AwsSqsClient {
-    async fn send_with_session(&self, queue_name: &str, message: &EventEnvelope, session_id: &str) -> Result<MessageId, AwsError> {
-        let send_request = SendMessageRequest {
-            queue_url: self.get_queue_url(queue_name)?,
-            message_body: String::from_utf8(MessageSerializer::serialize(message)?)?,
-            message_group_id: Some(session_id.to_string()),
-            message_deduplication_id: Some(message.event_id.clone()),
-            ..Default::default()
-        };
-
-        let response = self.sqs_client
-            .send_message(send_request)
-            .await?;
-
-        Ok(MessageId::new(response.message_id.unwrap_or_default()))
-    }
-
-    async fn receive_fifo_messages(&self, queue_name: &str) -> Result<Vec<ReceivedMessage<EventEnvelope, AwsReceipt>>, AwsError> {
-        let receive_request = ReceiveMessageRequest {
-            queue_url: self.get_queue_url(queue_name)?,
-            max_number_of_messages: Some(10),
-            wait_time_seconds: Some(20),
-            attribute_names: Some(vec!["MessageGroupId".to_string()]),
-            ..Default::default()
-        };
-
-        let response = self.sqs_client
-            .receive_message(receive_request)
-            .await?;
-
-        // Group messages by MessageGroupId for ordered processing
-        response.messages
-            .unwrap_or_default()
-            .into_iter()
-            .map(|msg| self.convert_received_message(msg))
-            .collect()
-    }
-}
-```
-
-## Session Key Examples
-
-### Pull Request Events
-
-```rust
-// PR opened
-let envelope = EventEnvelope {
-    event_type: "pull_request".to_string(),
-    repository: Repository::new("octocat", "Hello-World"),
-    entity_type: EntityType::PullRequest,
-    entity_id: Some("123".to_string()),
-    // ...
+// Generate session key
+let event = OrderEvent {
+    order_id: "12345".to_string(),
+    data: vec![1, 2, 3],
 };
 
-let session_key = EntitySessionStrategy.generate_key(&envelope);
-// Result: "pr-octocat/Hello-World-123"
+if let Some(session_id) = strategy.generate_key(&event) {
+    // Create message with session ID for ordered processing
+    let message = Message::new(Bytes::from(event.data))
+        .with_session_id(session_id);
+
+    // Send message
+    client.send_message(&queue, message).await?;
+}
 ```
 
-### Issue Events
+### Multi-Tenant Application
 
 ```rust
-// Issue commented
-let envelope = EventEnvelope {
-    event_type: "issue_comment".to_string(),
-    repository: Repository::new("octocat", "Hello-World"),
-    entity_type: EntityType::Issue,
-    entity_id: Some("456".to_string()),
-    // ...
+use queue_runtime::sessions::CompositeKeyStrategy;
+
+// Session keys like "tenant-123-resource-456"
+let strategy = CompositeKeyStrategy::new(
+    vec!["tenant_id".to_string(), "resource_id".to_string()],
+    "-"
+);
+
+// Messages for same tenant+resource ordered
+// Different tenant/resource combinations processed concurrently
+```
+
+### Optional Ordering
+
+```rust
+use queue_runtime::sessions::{FallbackStrategy, SingleFieldStrategy, NoOrderingStrategy};
+
+// Try entity-specific ordering, fall back to no ordering
+let strategy = FallbackStrategy::new(vec![
+    Box::new(SingleFieldStrategy::new("entity_id", Some("entity"))),
+    Box::new(NoOrderingStrategy),
+]);
+
+// If entity_id exists: ordered by entity
+// If entity_id missing: concurrent processing
+```
+
+### Time-Partitioned Sessions
+
+Applications can implement time-based partitioning to prevent hot sessions:
+
+```rust
+use queue_runtime::sessions::{SessionKeyGenerator, SessionKeyExtractor};
+use queue_runtime::message::SessionId;
+use chrono::{DateTime, Utc, Timelike};
+
+struct TimePartitionedStrategy {
+    base_strategy: Box<dyn SessionKeyGenerator>,
+    partition_hours: u32,
+}
+
+impl SessionKeyGenerator for TimePartitionedStrategy {
+    fn generate_key(&self, extractor: &dyn SessionKeyExtractor) -> Option<SessionId> {
+        // Get base session key
+        let base_key = self.base_strategy.generate_key(extractor)?;
+
+        // Add time partition
+        let now = Utc::now();
+        let partition = now.hour() / self.partition_hours;
+
+        // Create partitioned key
+        SessionId::new(format!("{}-p{}", base_key.as_str(), partition)).ok()
+    }
+}
+
+// Usage: sessions rotate every 4 hours
+let strategy = TimePartitionedStrategy {
+    base_strategy: Box::new(SingleFieldStrategy::new("order_id", Some("order"))),
+    partition_hours: 4,
 };
 
-let session_key = EntitySessionStrategy.generate_key(&envelope);
-// Result: "issue-octocat/Hello-World-456"
+// Produces: "order-12345-p0", "order-12345-p1", etc.
+// Prevents single session from growing too large
 ```
 
-### Repository Events
+## SessionLifecycleManager
 
-```rust
-// Repository push
-let envelope = EventEnvelope {
-    event_type: "push".to_string(),
-    repository: Repository::new("octocat", "Hello-World"),
-    entity_type: EntityType::Branch,
-    entity_id: Some("main".to_string()),
-    // ...
-};
+Manager for session metadata and state tracking. **Note**: This is currently just a placeholder type in the implementation.
 
-let session_key = RepositorySessionStrategy.generate_key(&envelope);
-// Result: "repo-octocat/Hello-World"
-```
+**Purpose** (Planned):
 
-## Performance Considerations
+- Track active sessions
+- Monitor session health (message rate, age)
+- Detect stalled sessions
+- Implement session timeout policies
+- Provide session metrics
 
-### Session Distribution
+**Current Status**: Implementation pending - framework in place for future development.
 
-Monitor session key distribution to avoid hot sessions:
+## Design Principles
 
-```rust
-pub struct SessionMetrics {
-    session_counts: HashMap<String, u64>,
-    session_durations: HashMap<String, Duration>,
-    last_activity: HashMap<String, DateTime<Utc>>,
-}
+### Domain-Agnostic
 
-impl SessionMetrics {
-    pub fn record_message(&mut self, session_id: &str) {
-        *self.session_counts.entry(session_id.to_string()).or_insert(0) += 1;
-        self.last_activity.insert(session_id.to_string(), Utc::now());
-    }
+This module makes **zero assumptions** about message content or business domain:
 
-    pub fn get_hot_sessions(&self, threshold: u64) -> Vec<String> {
-        self.session_counts
-            .iter()
-            .filter(|(_, &count)| count > threshold)
-            .map(|(session_id, _)| session_id.clone())
-            .collect()
-    }
+- No GitHub-specific types or logic
+- No assumed message structure
+- Works with any domain (e-commerce, IoT, finance, etc.)
+- Applications implement `SessionKeyExtractor` for their domain
 
-    pub fn get_session_distribution(&self) -> HashMap<String, u64> {
-        self.session_counts.clone()
-    }
-}
-```
+### Flexible Strategy Pattern
 
-### Session Lifecycle Management
+Different applications need different ordering semantics:
 
-```rust
-pub struct SessionLifecycleManager {
-    active_sessions: HashMap<String, SessionInfo>,
-    config: BotSessionConfig,
-}
+- **Single-field**: Simple entity-based ordering
+- **Composite**: Hierarchical or multi-dimensional ordering
+- **Fallback**: Fine-grained with coarse fallback
+- **No ordering**: Concurrent processing
+- **Custom**: Applications implement `SessionKeyGenerator` trait
 
-impl SessionLifecycleManager {
-    pub fn should_close_session(&self, session_id: &str) -> bool {
-        if let Some(session_info) = self.active_sessions.get(session_id) {
-            // Check duration limit
-            if session_info.duration() > self.config.max_session_duration {
-                return true;
-            }
+### Composable
 
-            // Check message count limit
-            if session_info.message_count > self.config.max_messages_per_session {
-                return true;
-            }
+Strategies can be combined:
 
-            // Check timeout
-            if session_info.idle_time() > self.config.session_timeout {
-                return true;
-            }
-        }
+- Fallback chains provide multiple ordering levels
+- Custom strategies wrap pre-built strategies
+- Time-partitioning can wrap any strategy
+- Applications build complex ordering logic from simple primitives
 
-        false
-    }
+## Behavioral Assertions
 
-    pub async fn cleanup_expired_sessions(&mut self) -> Result<Vec<String>, SessionError> {
-        let expired_sessions: Vec<String> = self.active_sessions
-            .iter()
-            .filter(|(session_id, _)| self.should_close_session(session_id))
-            .map(|(session_id, _)| session_id.clone())
-            .collect();
+### SessionKeyExtractor Assertions
 
-        for session_id in &expired_sessions {
-            self.active_sessions.remove(session_id);
-        }
+1. **get_metadata returns None for unknown keys**: Messages don't error on missing fields
+2. **get_metadata returns consistent values**: Same key returns same value (idempotent)
+3. **list_metadata_keys lists all available keys**: Complete metadata enumeration
 
-        Ok(expired_sessions)
-    }
-}
-```
+### SessionKeyGenerator Assertions
 
-## Best Practices
+1. **Same message produces same session key**: Deterministic key generation (idempotent)
+2. **Valid session IDs only**: Generated keys must pass SessionId validation
+3. **None means concurrent processing**: Returning None allows parallel execution
+4. **Generators are thread-safe**: Can be shared across async tasks (Send + Sync)
 
-1. **Choose Appropriate Strategy**: Match strategy to bot's ordering requirements
-2. **Monitor Session Distribution**: Avoid hot sessions that create bottlenecks
-3. **Set Reasonable Timeouts**: Balance ordering with throughput
-4. **Handle Session Failures**: Implement session recovery and error handling
-5. **Test Ordering Behavior**: Verify correct message sequencing in tests
-6. **Document Strategy Choice**: Clearly document why each bot uses its strategy
-7. **Plan for Growth**: Consider session partitioning for high-volume scenarios
-8. **Monitor Performance**: Track session metrics and processing delays
+### Strategy-Specific Assertions
+
+1. **SingleFieldStrategy returns None if field missing**: Graceful handling of missing data
+2. **CompositeKeyStrategy requires all fields**: Returns None if any field missing
+3. **FallbackStrategy tries in order**: First success returned, not all generators tried
+4. **NoOrderingStrategy always returns None**: Guarantees concurrent processing
+
+## Testing Strategy
+
+### Unit Testing
+
+- Test each strategy with mock messages
+- Test edge cases (missing fields, invalid characters)
+- Test SessionId validation in generated keys
+- Test strategy composition (Fallback)
+
+### Property-Based Testing
+
+- Generate random metadata combinations
+- Verify deterministic key generation
+- Test SessionId validation with generated keys
+- Verify thread safety with concurrent generation
+
+### Domain Integration Testing
+
+- Test strategies with real domain messages
+- Verify ordering semantics in queue operations
+- Test fallback behavior under various conditions
+- Measure performance impact of session generation
+
+## Usage Recommendations
+
+### When to Use Sessions
+
+**Use sessions when**:
+
+- Messages for same entity must be processed in order
+- State transitions require ordering (FSMs)
+- Exactly-once semantics required at entity level
+- Distributed coordination needed
+
+**Don't use sessions when**:
+
+- Messages are independent (stateless operations)
+- High throughput is critical
+- Order doesn't matter (notifications, alerts)
+- Messages can be processed in parallel
+
+### Choosing a Strategy
+
+**SingleFieldStrategy**:
+
+- Simple entity-based ordering
+- One primary grouping dimension
+- Clear entity identification
+
+**CompositeKeyStrategy**:
+
+- Hierarchical data (tenant → user → resource)
+- Multi-dimensional ordering
+- Compound business keys
+
+**FallbackStrategy**:
+
+- Fine-grained ordering when possible
+- Graceful degradation to coarser ordering
+- Mixed message types with different metadata
+
+**NoOrderingStrategy**:
+
+- Stateless operations
+- Maximum throughput needed
+- Order explicitly not required
+
+**Custom Strategy**:
+
+- Domain-specific ordering rules
+- Complex business logic
+- Time-based partitioning
+- Dynamic ordering decisions
+
+## Future Enhancements
+
+Potential additions to this module:
+
+1. **SessionLifecycleManager Implementation**: Active session tracking and health monitoring
+2. **Dynamic Strategies**: Strategy selection based on message content
+3. **Session Metrics**: Built-in instrumentation for session performance
+4. **Time-Based Partitioning**: Pre-built time-partitioning wrapper
+5. **Session Affinity**: Hint-based session routing to same worker
+6. **Session State Storage**: External state store integration for stateful sessions
