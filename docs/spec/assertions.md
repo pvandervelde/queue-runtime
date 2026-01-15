@@ -514,7 +514,7 @@ This document defines testable behavioral assertions for the queue-runtime libra
 
 ## Integration and Compatibility
 
-### Assertion 35: Provider Feature Compatibility
+### Assertion 38: Provider Feature Compatibility
 
 **Given**: Operations that use provider-specific features
 **When**: The same operations are performed on different providers
@@ -527,7 +527,7 @@ This document defines testable behavioral assertions for the queue-runtime libra
 - Graceful degradation when features unavailable
 - Clear error messages for unsupported operations
 
-### Assertion 36: Version Compatibility
+### Assertion 39: Version Compatibility
 
 **Given**: Different versions of provider SDKs
 **When**: Queue runtime is used with various SDK versions
