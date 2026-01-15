@@ -87,57 +87,277 @@ impl Debug for QueueRuntimeConfig {
 
 ---
 
-### Threat 2: Message Tampering
+### Threat 2: Message Tampering and Man-in-the-Middle Attacks
 
-**Description**: Attackers modify messages in transit or inject malicious messages into queues.
+**Description**: Attackers with access to queue infrastructure intercept, read, modify, or replay messages between sender and receiver.
 
-**Risk Level**: **HIGH**
+**Risk Level**: **CRITICAL**
 
 **Attack Scenarios**:
 
-- Man-in-the-middle attack intercepts and modifies messages
-- Attacker with queue access injects crafted messages
-- Replay attacks resend old messages to trigger unintended actions
+1. **Message Eavesdropping**: Attacker with queue read access views sensitive webhook payloads (private repository data, tokens, user information)
+2. **Message Modification**: Attacker modifies message content after send but before receive (e.g., changing PR number, repository name, or action type)
+3. **Message Injection**: Attacker crafts and inserts malicious messages that appear legitimate
+4. **Replay Attacks**: Attacker resends old valid messages to trigger duplicate or outdated actions
+5. **Substitution Attacks**: Attacker replaces entire message with different encrypted message
+
+**Threat Model**:
+
+- **Attacker Capabilities**: Read/write access to queue storage, ability to intercept messages in queue
+- **Assets at Risk**: Private repository data, webhook payloads, application logic integrity
+- **Attack Surface**: Messages at rest in queue, messages during provider internal processing
 
 **Mitigations**:
 
-1. **Transport Security**:
-   - All connections to Azure Service Bus and AWS SQS use TLS 1.2+
-   - Certificate validation enabled by default
-   - No support for plaintext connections
+#### 1. **End-to-End Message Encryption**
 
-2. **Message Signing** (Application Responsibility):
-   - Applications should sign message payloads using HMAC or digital signatures
-   - Include signature in message properties for verification
-   - Reject messages with invalid signatures
+**Purpose**: Prevent eavesdropping by encrypting message bodies end-to-end, even if queue infrastructure is compromised.
 
-3. **Correlation IDs**:
-   - Use correlation IDs to track message flow
-   - Detect and reject duplicate message IDs (replay attacks)
-   - Log correlation ID with all operations for audit trail
+**Implementation**:
 
-4. **Source Authentication**:
-   - GitHub webhooks include signatures (X-Hub-Signature)
-   - Verify webhook signatures before enqueuing messages
-   - Only accept messages from trusted sources
+- Use authenticated encryption (AES-256-GCM) for all message bodies
+- Encryption keys managed by application (not queue provider)
+- Automatic encryption on send, decryption on receive
+- See [cryptography module specification](./modules/cryptography.md) for complete design
 
-**Implementation Guidance**:
+**Configuration**:
 
 ```rust
-// Applications should implement message signing
-pub struct SignedMessage {
-    payload: Vec<u8>,
-    signature: String,  // HMAC-SHA256 of payload
-    timestamp: i64,     // Unix timestamp
+use queue_runtime::{QueueClientBuilder, CryptoConfig};
+
+let client = QueueClientBuilder::new()
+    .with_azure_provider(config)
+    .with_crypto(CryptoConfig {
+        enabled: true,
+        max_message_age: Duration::from_secs(300), // 5 minute freshness
+        validate_freshness: true,
+        ..Default::default()
+    })
+    .with_key_provider(key_provider)
+    .build()
+    .await?;
+```
+
+**Benefits**:
+
+- Confidentiality: Message content unreadable without encryption key
+- Integrity: Authentication tag prevents undetected modification
+- Authenticity: Only parties with correct key can create valid messages
+- Defense in depth: Protection even if TLS or queue access controls fail
+
+#### 2. **Transport Security**
+
+**Purpose**: Protect messages in transit between application and queue service.
+
+**Implementation**:
+
+- All connections to Azure Service Bus and AWS SQS use TLS 1.2+
+- Certificate validation enabled by default
+- No support for plaintext connections
+- HTTPS endpoints only
+
+**Limitations**: Only protects network transit, not storage at rest or provider-internal access.
+
+#### 3. **Message Authentication Tags**
+
+**Purpose**: Detect message tampering through cryptographic verification.
+
+**Implementation**:
+
+- AES-256-GCM produces 128-bit authentication tag for each message
+- Tag verified during decryption before returning plaintext
+- Includes message ID and session ID in authenticated associated data
+- Tampering detection guaranteed with high confidence
+
+**Behavior**:
+
+```rust
+// Automatic authentication on receive
+let received = client.receive().await?;
+
+// If authentication fails (message tampered):
+// Error: CryptoError::AuthenticationFailed
+```
+
+#### 4. **Replay Protection**
+
+**Purpose**: Prevent old valid messages from being replayed.
+
+**Implementation**:
+
+**Timestamp-Based Freshness** (Default):
+
+- Each encrypted message includes encryption timestamp
+- Configurable maximum message age (default: 5 minutes)
+- Messages older than threshold rejected automatically
+
+```rust
+let config = CryptoConfig {
+    max_message_age: Duration::from_secs(300),
+    validate_freshness: true,
+    ..Default::default()
+};
+```
+
+**Nonce Tracking** (High Security):
+
+- Track used nonces in cache/database
+- Reject messages with reused nonces
+- Opt-in for scenarios requiring strongest replay protection
+
+```rust
+let config = CryptoConfig {
+    track_nonces: true,
+    nonce_cache_ttl: Duration::from_secs(600),
+    ..Default::default()
+};
+```
+
+**Trade-offs**:
+
+- Freshness: Simple, no storage, but allows replays within window
+- Nonce tracking: Strongest protection, but requires stateful storage
+
+#### 5. **Correlation IDs and Audit Trails**
+
+**Purpose**: Enable detection of suspicious message patterns.
+
+**Implementation**:
+
+- Use correlation IDs to track message flow
+- Log message IDs with all operations (send, receive, complete)
+- Monitor for duplicate message IDs or unusual patterns
+- Correlation ID in authenticated associated data (prevents substitution)
+
+**Example**:
+
+```rust
+let msg = Message::builder()
+    .with_body(payload)
+    .with_correlation_id(request_id)
+    .build();
+
+// Correlation ID logged but message body encrypted
+tracing::info!(
+    correlation_id = %msg.correlation_id(),
+    message_id = %msg.id(),
+    "Message sent"
+);
+```
+
+#### 6. **Source Authentication**
+
+**Purpose**: Verify messages originate from trusted sources.
+
+**Implementation**:
+
+- GitHub webhooks include signatures (X-Hub-Signature-256)
+- Verify webhook signatures **before** enqueuing messages
+- Only accept messages from authenticated sources
+- Webhook verification remains application responsibility (before queue library)
+
+```rust
+// Application code (before sending to queue)
+fn verify_github_webhook(payload: &[u8], signature: &str, secret: &[u8]) -> bool {
+    let computed = hmac_sha256(secret, payload);
+    constant_time_compare(&computed, signature)
 }
 
-// Verify signature before processing
-fn verify_message(msg: &SignedMessage, secret: &[u8]) -> bool {
-    let computed = hmac_sha256(secret, &msg.payload);
-    constant_time_compare(&computed, &msg.signature)
-        && (now() - msg.timestamp) < 300  // 5 minute freshness
+if verify_github_webhook(&payload, &signature, &webhook_secret) {
+    queue_client.send(message).await?;
+} else {
+    return Err("Invalid webhook signature");
 }
 ```
+
+---
+
+### Security Architecture Layers
+
+```mermaid
+graph TB
+    subgraph "Application Layer"
+        APP[Bot Application]
+        WEBHOOK[Webhook Verification]
+    end
+
+    subgraph "Queue Runtime Library"
+        ENCRYPT[Message Encryption]
+        DECRYPT[Message Decryption]
+        AUTH[Authentication Check]
+        FRESH[Freshness Validation]
+    end
+
+    subgraph "Transport Layer"
+        TLS[TLS 1.2+ Encryption]
+    end
+
+    subgraph "Queue Infrastructure"
+        QUEUE[Azure/AWS Queue]
+        STORAGE[Queue Storage at Rest]
+    end
+
+    APP -->|1. Verify webhook| WEBHOOK
+    WEBHOOK -->|2. Send plaintext| ENCRYPT
+    ENCRYPT -->|3. Encrypted bytes| TLS
+    TLS -->|4. Store encrypted| STORAGE
+
+    STORAGE -->|5. Retrieve encrypted| TLS
+    TLS -->|6. Encrypted bytes| FRESH
+    FRESH -->|7. Check timestamp| AUTH
+    AUTH -->|8. Verify tag| DECRYPT
+    DECRYPT -->|9. Plaintext| APP
+
+    style ENCRYPT fill:#c8e6c9
+    style DECRYPT fill:#c8e6c9
+    style AUTH fill:#c8e6c9
+    style FRESH fill:#c8e6c9
+    style STORAGE fill:#ffcdd2
+```
+
+**Defense in Depth**:
+
+1. **Application**: Webhook signature verification
+2. **Library**: End-to-end encryption + authentication
+3. **Transport**: TLS for network transit
+4. **Provider**: Queue access controls and network isolation
+
+**Key Insight**: Even if transport (TLS) or infrastructure (queue access) is compromised, message content remains protected through end-to-end encryption.
+
+---
+
+### Key Management Requirements
+
+**Application Responsibilities**:
+
+1. **Key Storage**:
+   - Store encryption keys in secure secret management system (Azure Key Vault, AWS Secrets Manager)
+   - Never commit keys to source control
+   - Use separate keys per environment (dev, staging, prod)
+
+2. **Key Rotation**:
+   - Rotate encryption keys every 90 days (recommended)
+   - Use multi-key support during rotation (no downtime)
+   - Remove old keys after queue TTL expires
+
+3. **Access Control**:
+   - Restrict key access to authorized services only
+   - Use managed identities/IAM roles instead of connection strings
+   - Audit key access patterns
+
+**Library Responsibilities**:
+
+1. **Key Protection**:
+   - Zero key material from memory on drop
+   - Never log or expose keys in error messages
+   - Redact keys in Debug implementations
+
+2. **Key Provider Interface**:
+   - Abstract interface for key retrieval
+   - Support multiple active keys (rotation)
+   - Async key loading from secret stores
+
+See [cryptography module](./modules/cryptography.md) for complete key management design.
 
 ---
 
