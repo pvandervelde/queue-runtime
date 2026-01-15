@@ -201,6 +201,109 @@ AWS SQS concept for message lock duration.
 - **Extension**: Can be modified while message is being processed
 - **Expiration**: Message becomes visible again after timeout
 
+## Security and Cryptography Concepts
+
+### Encryption Key
+
+Cryptographic key material used to encrypt and decrypt message bodies.
+
+- **Key ID**: Unique identifier for the key (non-sensitive, can be logged)
+- **Key Material**: Raw bytes of the key (256-bit for AES-256-GCM)
+- **Lifecycle**: Creation timestamp, optional expiration
+- **Rotation**: Multiple keys active simultaneously during rotation
+- **Security**: Zeroed from memory on drop, never logged
+
+### Key Provider
+
+Abstraction that retrieves encryption keys from secure storage.
+
+- **Responsibilities**: Load keys by ID, manage key rotation, enforce access control
+- **Implementations**: Azure Key Vault, AWS Secrets Manager, in-memory (testing)
+- **Current Key**: The key ID used for encrypting new messages
+- **Valid Keys**: All key IDs that can decrypt existing messages (current + historical)
+- **Async**: Keys loaded asynchronously from external secret stores
+
+### Encrypted Message
+
+Message with body encrypted using authenticated encryption (AEAD).
+
+- **Ciphertext**: Encrypted message body (opaque bytes)
+- **Nonce**: Unique 96-bit value for encryption operation (must never repeat with same key)
+- **Authentication Tag**: 128-bit cryptographic proof of integrity
+- **Key ID**: Identifier of key used for encryption (for decryption key lookup)
+- **Timestamp**: When message was encrypted (for freshness validation)
+- **Version**: Format version for future algorithm upgrades
+
+### Nonce
+
+Cryptographic number-used-once for AEAD cipher operations.
+
+- **Purpose**: Ensures same plaintext encrypts to different ciphertext each time
+- **Size**: 96 bits (12 bytes) for AES-GCM
+- **Generation**: Cryptographically secure random number generator
+- **Uniqueness**: Must be unique per encryption operation with same key
+- **Storage**: Included in encrypted message (required for decryption)
+
+### Authentication Tag
+
+Cryptographic proof that message has not been tampered with.
+
+- **Size**: 128 bits (16 bytes) for AES-GCM
+- **Verification**: Must match before plaintext is returned to caller
+- **Coverage**: Authenticates ciphertext + associated data (message ID, session ID)
+- **Failure**: Authentication failure indicates tampering or corruption
+- **Constant-Time**: Verification uses constant-time comparison to prevent timing attacks
+
+### Associated Data
+
+Metadata authenticated but not encrypted in AEAD operations.
+
+- **Purpose**: Bind encryption to specific message context
+- **Contents**: Message ID, session ID, correlation ID, timestamp
+- **Cleartext**: Remains readable for routing and logging
+- **Authenticated**: Included in authentication tag calculation
+- **Tamper Detection**: Changes to associated data invalidate authentication
+
+### Freshness Validation
+
+Mechanism to detect replay attacks by checking message age.
+
+- **Timestamp**: Encryption time included in message
+- **Max Age**: Configurable window (default: 5 minutes)
+- **Check**: Reject messages older than max age
+- **Trade-off**: Allows replays within window, but simple and stateless
+- **Alternative**: Nonce tracking for stronger protection
+
+### Nonce Tracking
+
+Stateful replay protection by recording used nonces.
+
+- **Purpose**: Detect and reject duplicate nonces (replay attacks)
+- **Storage**: Cache or database of used nonces
+- **TTL**: Nonces expire after configurable time (default: 10 minutes)
+- **Performance**: Adds storage overhead and latency
+- **Use Case**: High-security scenarios requiring strongest replay protection
+
+### Key Rotation
+
+Process of replacing encryption keys without service interruption.
+
+- **Multi-Key Support**: Multiple keys active simultaneously during rotation
+- **New Messages**: Encrypted with current (newest) key
+- **Old Messages**: Still decrypt with historical keys
+- **Rotation Schedule**: Recommended every 90 days
+- **Cleanup**: Remove old keys after queue TTL expires
+
+### Crypto Provider
+
+Abstraction that performs cryptographic operations.
+
+- **Encryption**: Transforms plaintext to ciphertext with authentication
+- **Decryption**: Transforms ciphertext to plaintext after verification
+- **Algorithm**: Default implementation uses AES-256-GCM
+- **Key Lookup**: Collaborates with KeyProvider to retrieve keys
+- **Thread-Safe**: Can be shared across multiple queue clients
+
 ## Configuration Concepts
 
 ### Queue Definition
@@ -222,6 +325,37 @@ Settings required to connect to a queue provider.
 - **Timeouts**: Connection and operation timeout settings
 - **Retry**: Connection retry and circuit breaker configuration
 - **TLS**: Security and certificate validation settings
+
+### Crypto Configuration
+
+Settings for message encryption and MITM protection.
+
+- **Enabled**: Whether encryption is active (default: false, opt-in)
+- **Plaintext Policy**: How to handle unencrypted messages (Allow/Reject/AllowWithAlert)
+- **Max Message Age**: Freshness validation window (default: 5 minutes)
+- **Validate Freshness**: Enable/disable timestamp checking (default: true)
+- **Track Nonces**: Enable/disable replay detection via nonce tracking (default: false)
+- **Key Provider**: Interface for loading encryption keys
+
+### Encryption Marker
+
+Magic bytes prepended to encrypted message bodies for detection.
+
+- **Value**: \"QRE1\" (Queue Runtime Encrypted, version 1)
+- **Purpose**: Enables receiver to distinguish encrypted from plaintext messages
+- **Detection**: Check if first 4 bytes match marker
+- **Position**: Beginning of message body (before encrypted data)
+- **Version**: Fourth byte indicates encryption format version
+
+### Plaintext Policy
+
+Strategy for handling unencrypted messages on receive.
+
+- **Allow**: Accept plaintext messages with WARNING log (backward compatibility)
+- **Reject**: Return error for plaintext messages (strict security mode)
+- **AllowWithAlert**: Process plaintext but log ERROR and emit metric
+- **Purpose**: Control security posture vs. backward compatibility
+- **Default**: Allow (for gradual encryption rollout)
 
 ## Observability Concepts
 

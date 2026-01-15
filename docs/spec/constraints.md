@@ -110,6 +110,65 @@ pub struct QueueTimeouts {
 - Certificate validation MUST be enabled by default
 - Support corporate proxy configurations where needed
 
+### Cryptography (NEW)
+
+- All encryption keys MUST be zeroed from memory on drop (use `zeroize` crate)
+- Keys MUST NEVER be logged, even in debug/trace mode
+- Key IDs MAY be logged (non-sensitive identifiers)
+- Debug implementations for key types MUST redact key material
+- Use constant-time comparison for all cryptographic verification operations
+- Default to AES-256-GCM (FIPS 140-2 approved cipher)
+- Nonce generation MUST use cryptographically secure RNG
+- Authentication tag verification MUST happen before plaintext is returned
+- Support key rotation without service interruption (multi-key support)
+- Timestamp-based freshness validation MUST be configurable
+- Encrypted message format MUST include version field for future upgrades
+
+**Crypto Configuration Constraints**:
+
+```rust
+pub struct CryptoConfig {
+    pub enabled: bool,                   // Default: false (opt-in)
+    pub max_message_age: Duration,       // Default: 5 minutes
+    pub validate_freshness: bool,        // Default: true
+    pub track_nonces: bool,              // Default: false (opt-in)
+    pub nonce_cache_ttl: Duration,       // Default: 10 minutes
+}
+```
+
+**Key Provider Interface**:
+
+```rust
+#[async_trait]
+pub trait KeyProvider: Send + Sync {
+    async fn get_key(&self, key_id: &EncryptionKeyId) 
+        -> Result<EncryptionKey, CryptoError>;
+    async fn current_key_id(&self) -> Result<EncryptionKeyId, CryptoError>;
+    async fn valid_key_ids(&self) -> Result<Vec<EncryptionKeyId>, CryptoError>;
+}
+```
+
+**Crypto Provider Interface**:
+
+```rust
+#[async_trait]
+pub trait CryptoProvider: Send + Sync {
+    async fn encrypt(&self, key_id: &EncryptionKeyId, plaintext: &[u8], 
+                     associated_data: &[u8]) -> Result<EncryptedMessage, CryptoError>;
+    async fn decrypt(&self, encrypted: &EncryptedMessage) 
+        -> Result<Vec<u8>, CryptoError>;
+}
+```
+
+**Security Properties**:
+- Confidentiality: AES-256 encryption (industry standard)
+- Integrity: 128-bit authentication tag (GCM mode)
+- Authenticity: AEAD with associated data
+- Freshness: Configurable timestamp validation
+- Replay protection: Optional nonce tracking
+
+See [cryptography module](./modules/cryptography.md) for complete specification.
+
 ## Testing Constraints
 
 ### Unit Testing

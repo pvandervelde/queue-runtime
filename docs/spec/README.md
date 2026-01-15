@@ -21,6 +21,7 @@ Start here to understand the system context and establish common terminology:
 - **[Overview](./overview.md)** - System context, problem statement, stakeholders, and success criteria
 - **[Vocabulary](./vocabulary.md)** - Domain concepts and terminology used throughout the specification
 - **[Architecture](./architecture.md)** - Logical boundaries, dependencies, and hexagonal architecture pattern
+- **[MITM Protection Summary](./mitm-protection-summary.md)** - Man-in-the-middle attack prevention architecture (NEW)
 
 ### Design Decisions
 
@@ -53,6 +54,7 @@ Detailed specifications for individual modules:
 - **[Sessions](./modules/sessions.md)** - Session management and ordering strategies
 - **[Retry Logic](./modules/retry.md)** - Retry policies, backoff strategies, and circuit breakers
 - **[Dead Letter Queue](./modules/dlq.md)** - DLQ handling and poison message detection
+- **[Cryptography](./modules/cryptography.md)** - Message encryption and MITM protection (NEW)
 - **[Azure Provider](./modules/azure.md)** - Azure Service Bus implementation
 - **[AWS Provider](./modules/aws.md)** - AWS SQS implementation (planned)
 - **[Observability](./modules/observability.md)** - Metrics, tracing, and logging

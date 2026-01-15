@@ -315,9 +315,206 @@ This document defines testable behavioral assertions for the queue-runtime libra
 - Error logs include full error context
 - No sensitive data in log messages
 
+## Cryptography and MITM Protection
+
+### Assertion 24: Message Encryption Round-Trip
+
+**Given**: A queue client with encryption enabled and a valid key provider
+**When**: A message is sent with plaintext body
+**Then**: Message is automatically encrypted before sending
+**And**: When received, message is automatically decrypted to original plaintext
+
+**Test Criteria**:
+
+- Decrypted plaintext exactly matches original plaintext
+- Application code does not handle encryption/decryption
+- Encryption transparent to caller (same API as non-encrypted)
+
+### Assertion 25: Tampered Message Rejection
+
+**Given**: An encrypted message that has been tampered with
+**When**: The tampered message is decrypted
+**Then**: Operation returns `Err(CryptoError::AuthenticationFailed)`
+**And**: Plaintext is never returned to caller
+
+**Test Criteria**:
+
+- Ciphertext modification detected (bit flip in body)
+- Authentication tag modification detected
+- Associated data modification detected (message ID change)
+- Error message does not reveal key information
+
+### Assertion 26: Freshness Validation
+
+**Given**: An encrypted message with timestamp older than configured max age
+**When**: Message is received with freshness validation enabled
+**Then**: Operation returns `Err(CryptoError::MessageExpired)`
+**And**: Message is not decrypted or processed
+
+**Test Criteria**:
+
+- Message encrypted 10 minutes ago rejected (max_age = 5 minutes)
+- Message encrypted 2 minutes ago accepted (max_age = 5 minutes)
+- Error includes timestamp and max age for debugging
+- Validation can be disabled via configuration
+
+### Assertion 27: Key Rotation Support
+
+**Given**: A key provider with multiple active keys
+**When**: Messages are encrypted with key A and key provider rotates to key B
+**Then**: New messages encrypt with key B
+**And**: Old messages encrypted with key A still decrypt successfully
+
+**Test Criteria**:
+
+- Messages encrypted with old key decrypt correctly
+- Messages encrypted with new key decrypt correctly
+- Key ID stored in encrypted message metadata
+- No service interruption during key rotation
+
+### Assertion 28: Key Not Found Error
+
+**Given**: An encrypted message referencing a non-existent key ID
+**When**: Message decryption is attempted
+**Then**: Operation returns `Err(CryptoError::KeyNotFound { key_id })`
+**And**: Error includes the missing key ID for debugging
+
+**Test Criteria**:
+
+- Error clearly identifies which key is missing
+- Error distinguishes key-not-found from authentication-failed
+- Suggests checking key rotation and key provider configuration
+
+### Assertion 29: Replay Attack Prevention (Nonce Tracking)
+
+**Given**: Crypto config with nonce tracking enabled
+**When**: Same encrypted message is received twice
+**Then**: First receive succeeds, second receive returns `Err(CryptoError::NonceReused)`
+
+**Test Criteria**:
+
+- Duplicate nonce detected and rejected
+- Nonce cache respects configured TTL
+- Nonce tracking optional (disabled by default for performance)
+
+### Assertion 30: Metadata Remains Cleartext
+
+**Given**: A message with session ID, correlation ID, and properties
+**When**: Message is encrypted
+**Then**: Message body is encrypted
+**And**: Session ID, correlation ID, and message ID remain in cleartext
+
+**Test Criteria**:
+
+- Session-based routing works with encrypted messages
+- Correlation IDs visible in logs for tracing
+- Message IDs used for deduplication
+- Only message body encrypted (routing metadata cleartext)
+
+### Assertion 31: Key Material Security
+
+**Given**: An encryption key loaded into memory
+**When**: Key is no longer needed
+**Then**: Key material is zeroed from memory
+**And**: Key never appears in logs or error messages
+
+**Test Criteria**:
+
+- Debug implementation redacts key material
+- Drop implementation zeros memory (zeroize crate)
+- Error messages never include key bytes
+- Key IDs MAY be logged (non-sensitive)
+
+### Assertion 32: Crypto Disabled by Default
+
+**Given**: A queue client created without explicit crypto configuration
+**When**: Messages are sent and received
+**Then**: No encryption/decryption occurs
+**And**: Messages sent as plaintext (backward compatible)
+
+**Test Criteria**:
+
+- Default config has `crypto.enabled = false`
+- Encryption opt-in via explicit configuration
+- No performance overhead when disabled
+- Clear documentation on enabling crypto
+
+### Assertion 33: Algorithm Versioning
+
+**Given**: An encrypted message with version field
+**When**: Message is received by library
+**Then**: If version supported, decrypt successfully
+**And**: If version unsupported, return `Err(CryptoError::UnsupportedVersion)`
+
+**Test Criteria**:
+
+- Version 1 (AES-256-GCM) supported
+- Unknown versions rejected with clear error
+- Enables future algorithm upgrades without breaking changes
+- Version field in encrypted message envelope
+
+### Assertion 34: Constant-Time Verification
+
+**Given**: Authentication tag verification during decryption
+**When**: Tag is correct or incorrect
+**Then**: Verification time does not reveal information about tag correctness
+
+**Test Criteria**:
+
+- Use constant-time comparison functions
+- No timing-based information leakage
+- Prevents timing attacks on authentication tag
+- Use `subtle` crate or equivalent for comparisons
+
+### Assertion 35: Encryption Detection and Mixed Mode
+
+**Given**: A receiver configured to accept both encrypted and plaintext messages
+**When**: Messages arrive with and without encryption
+**Then**: Receiver correctly detects encryption status for each message
+**And**: Plaintext messages log WARNING and emit metric `encrypted="false"`
+**And**: Encrypted messages log INFO and emit metric `encrypted="true"`
+
+**Test Criteria**:
+
+- Message body starting with "QRE1" detected as encrypted
+- Message body without marker detected as plaintext
+- Both message types processed correctly
+- Metrics distinguish encrypted vs plaintext (labeled counters)
+- Logs include encryption status for observability
+
+### Assertion 36: Debug Mode with Encryption Disabled
+
+**Given**: A sender with crypto config `enabled: false`
+**When**: Messages are sent
+**Then**: Messages sent as plaintext (no encryption)
+**And**: Each send logs WARNING about encryption disabled
+**And**: Metric `queue_messages_sent{encrypted="false"}` incremented
+
+**Test Criteria**:
+
+- No "QRE1" marker in message body
+- No encryption overhead (performance)
+- Clear warnings in logs for audit trail
+- Metrics enable monitoring of unencrypted messages
+
+### Assertion 37: Plaintext Policy Enforcement
+
+**Given**: A receiver with `plaintext_policy: PlaintextPolicy::Reject`
+**When**: A plaintext (unencrypted) message is received
+**Then**: Operation returns `Err(QueueError::UnencryptedMessage)`
+**And**: Message is not processed
+**And**: Error logged and metric incremented
+
+**Test Criteria**:
+
+- Plaintext messages rejected in strict mode
+- Error clearly indicates encryption requirement
+- No security bypass possible
+- Policy configurable (Allow/Reject/AllowWithAlert)
+
 ## Integration and Compatibility
 
-### Assertion 24: Provider Feature Compatibility
+### Assertion 38: Provider Feature Compatibility
 
 **Given**: Operations that use provider-specific features
 **When**: The same operations are performed on different providers
@@ -330,7 +527,7 @@ This document defines testable behavioral assertions for the queue-runtime libra
 - Graceful degradation when features unavailable
 - Clear error messages for unsupported operations
 
-### Assertion 25: Version Compatibility
+### Assertion 39: Version Compatibility
 
 **Given**: Different versions of provider SDKs
 **When**: Queue runtime is used with various SDK versions

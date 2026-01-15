@@ -101,6 +101,7 @@ graph TB
 3. **Message Handling**: Message structure, serialization helpers, metadata management
 4. **Retry Logic**: Exponential backoff, error classification, circuit breaker
 5. **Dead Letter Handling**: Poison message detection, DLQ routing, failure tracking
+6. **Cryptography**: Message encryption/decryption, authentication, freshness validation
 
 **Responsibilities**:
 
@@ -109,6 +110,8 @@ graph TB
 - Enforce session ordering constraints
 - Manage retry policies and circuit breakers
 - Track delivery counts and failure reasons
+- Encrypt outgoing messages, decrypt incoming messages
+- Validate message authenticity and freshness
 
 **NOT Responsible For**:
 
@@ -116,12 +119,14 @@ graph TB
 - Connection management to cloud services
 - Provider authentication details
 - Physical message transport
+- Encryption key storage or rotation (application responsibility)
 
 **Dependencies**:
 
 - Business logic depends only on **Port interfaces**
 - NO direct dependencies on provider adapters
 - NO imports of Azure SDK or AWS SDK
+- Cryptography depends on KeyProvider abstraction (application-provided)
 
 ---
 
