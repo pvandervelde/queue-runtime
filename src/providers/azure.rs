@@ -53,8 +53,10 @@ use crate::message::{
 };
 use crate::provider::{AzureServiceBusConfig, ProviderType, SessionSupport};
 use async_trait::async_trait;
-use azure_core::credentials::{Secret, TokenCredential};
-use azure_identity::{ClientSecretCredential, ManagedIdentityCredential};
+use azure_core::auth::TokenCredential;
+use azure_identity::{
+    ClientSecretCredential, TokenCredentialOptions, VirtualMachineManagedIdentityCredential,
+};
 use chrono::{Duration, Utc};
 use reqwest::{header, Client as HttpClient, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -281,16 +283,12 @@ impl AzureServiceBusProvider {
                     )
                 })?;
 
-                let credential = ManagedIdentityCredential::new(None).map_err(|e| {
-                    AzureError::AuthenticationError(format!(
-                        "Failed to create managed identity credential: {}",
-                        e
-                    ))
-                })?;
+                let credential =
+                    VirtualMachineManagedIdentityCredential::new(TokenCredentialOptions::default());
                 let namespace_url = format!("https://{}.servicebus.windows.net", namespace);
                 (
                     namespace_url,
-                    Some(credential as Arc<dyn TokenCredential + Send + Sync>),
+                    Some(Arc::new(credential) as Arc<dyn TokenCredential + Send + Sync>),
                 )
             }
             AzureAuthMethod::ClientSecret {
@@ -304,22 +302,24 @@ impl AzureServiceBusProvider {
                     )
                 })?;
 
+                // Create HTTP client for credential
+                let http_client = azure_core::new_http_client();
+                let authority_host = azure_core::Url::parse("https://login.microsoftonline.com")
+                    .map_err(|e| {
+                        AzureError::ConfigurationError(format!("Invalid authority URL: {}", e))
+                    })?;
+
                 let credential = ClientSecretCredential::new(
-                    tenant_id,
-                    client_id.to_string(),
-                    Secret::new(client_secret.clone()),
-                    Default::default(),
-                )
-                .map_err(|e| {
-                    AzureError::AuthenticationError(format!(
-                        "Failed to create client secret credential: {}",
-                        e
-                    ))
-                })?;
+                    http_client,
+                    authority_host,
+                    tenant_id.clone(),
+                    client_id.clone(),
+                    client_secret.clone(),
+                );
                 let namespace_url = format!("https://{}.servicebus.windows.net", namespace);
                 (
                     namespace_url,
-                    Some(credential as Arc<dyn TokenCredential + Send + Sync>),
+                    Some(Arc::new(credential) as Arc<dyn TokenCredential + Send + Sync>),
                 )
             }
             AzureAuthMethod::DefaultCredential => {
@@ -329,14 +329,13 @@ impl AzureServiceBusProvider {
                     )
                 })?;
 
-                // Use ManagedIdentity as default (DefaultAzureCredential doesn't exist in azure_identity 0.30)
-                let credential = ManagedIdentityCredential::new(None).map_err(|e| {
-                    AzureError::AuthenticationError(format!("Failed to create credential: {}", e))
-                })?;
+                // Use VirtualMachine ManagedIdentity as default
+                let credential =
+                    VirtualMachineManagedIdentityCredential::new(TokenCredentialOptions::default());
                 let namespace_url = format!("https://{}.servicebus.windows.net", namespace);
                 (
                     namespace_url,
-                    Some(credential as Arc<dyn TokenCredential + Send + Sync>),
+                    Some(Arc::new(credential) as Arc<dyn TokenCredential + Send + Sync>),
                 )
             }
         };
@@ -414,7 +413,7 @@ impl AzureServiceBusProvider {
         match &self.credential {
             Some(cred) => {
                 let scopes = &["https://servicebus.azure.net/.default"];
-                let token = cred.get_token(scopes, None).await.map_err(|e| {
+                let token = cred.get_token(scopes).await.map_err(|e| {
                     AzureError::AuthenticationError(format!("Failed to get token: {}", e))
                 })?;
                 Ok(token.token.secret().to_string())

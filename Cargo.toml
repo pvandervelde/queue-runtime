@@ -13,43 +13,43 @@ readme = "README.md"
 
 [dependencies]
 # Core dependencies
-tokio = { version = "1.0" }
-tracing = { version = "1.0" }
-serde = { version = "1.0" }
-serde_json = { version = "1.0" }
-uuid = { version = "1.0" }
+tokio = { version = "1.0", features = ["full"] }
+tracing = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.0", features = ["v4", "serde"] }
 
 # Date/time
-chrono = { version = "1.0" }
+chrono = { version = "0.4", features = ["serde"] }
 
 # Error handling
-thiserror = { version = "1.0" }
-anyhow = { version = "1.0" }
+thiserror = "1.0"
+anyhow = "1.0"
 
 # Async traits
-async-trait = { version = "1.0" }
+async-trait = "0.1"
 
 # HTTP client
-reqwest = { version = "1.0" }
+reqwest = { version = "0.12", features = ["json"] }
 
 # Azure Service Bus
-azure_messaging_servicebus = { version = "1.0" }
-azure_core = { version = "1.0" }
-azure_identity = { version = "1.0" }
+azure_messaging_servicebus = "0.20"
+azure_core = "0.20"
+azure_identity = "0.20"
 
 # Configuration
-config = { version = "1.0" }
+config = "0.14"
 
 # Utilities
-url = { version = "1.0" }
-bytes = { version = "1.0" }
+url = "2.5"
+bytes = "1.0"
 base64 = "0.22"
 urlencoding = "2.1"
-hmac = { version = "1.0" }
-sha2 = { version = "1.0" }
-hex = { version = "1.0" }
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
 quick-xml = "0.31"
 
 [dev-dependencies]
-tempfile = "=3.23.0"
-tokio-test = "=0.4.4"
+tempfile = "3.23"
+tokio-test = "0.4"

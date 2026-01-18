@@ -181,7 +181,7 @@
 //! use chrono::Duration;
 //! if let Some(received) = client.receive_message(&queue, Duration::seconds(10)).await? {
 //!     println!("Received: {:?}", received.body);
-//!     
+//!
 //!     // Complete the message
 //!     client.complete_message(received.receipt_handle).await?;
 //! }
@@ -1201,7 +1201,7 @@ impl AwsSqsProvider {
                         let message_id = current_message_id
                             .as_ref()
                             .and_then(|id| MessageId::from_str(id).ok())
-                            .unwrap_or_else(MessageId::new);
+                            .unwrap_or_default();
 
                         // Parse session ID
                         let session_id = current_session_id
@@ -1416,7 +1416,7 @@ impl QueueProvider for AwsSqsProvider {
         }
 
         let queue_name =
-            QueueName::new(parts[0].to_string()).map_err(|e| QueueError::ValidationError(e))?;
+            QueueName::new(parts[0].to_string()).map_err(QueueError::ValidationError)?;
         let receipt_token = parts[1];
 
         // Get queue URL
@@ -1454,7 +1454,7 @@ impl QueueProvider for AwsSqsProvider {
         }
 
         let queue_name =
-            QueueName::new(parts[0].to_string()).map_err(|e| QueueError::ValidationError(e))?;
+            QueueName::new(parts[0].to_string()).map_err(QueueError::ValidationError)?;
         let receipt_token = parts[1];
 
         // Get queue URL
@@ -1993,7 +1993,7 @@ impl AwsSessionProvider {
                         let message_id = current_message_id
                             .as_ref()
                             .and_then(|id| MessageId::from_str(id).ok())
-                            .unwrap_or_else(MessageId::new);
+                            .unwrap_or_default();
 
                         let session_id = current_session_id
                             .as_ref()
