@@ -1,0 +1,55 @@
+[package]
+description = "Multi-provider queue runtime for Queue-Keeper"
+edition = "2021"
+license = "Apache-2.0"
+name = "queue-runtime"
+repository = "https://github.com/pvandervelde/queue-runtime"
+version = "0.1.0"
+
+# Crate metadata
+keywords = ["github", "webhook", "api"]
+categories = ["api-bindings", "web-programming"]
+readme = "README.md"
+
+[dependencies]
+# Core dependencies
+tokio = { version = "1.0", features = ["full"] }
+tracing = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Async traits
+async-trait = "0.1"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json"] }
+
+# Azure Service Bus
+azure_messaging_servicebus = "0.20"
+azure_core = "0.20"
+azure_identity = "0.20"
+
+# Configuration
+config = "0.14"
+
+# Utilities
+url = "2.5"
+bytes = "1.0"
+base64 = "0.22"
+urlencoding = "2.1"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+quick-xml = "0.31"
+
+[dev-dependencies]
+tempfile = "3.23"
+tokio-test = "0.4"
