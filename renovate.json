@@ -3,8 +3,14 @@
   "extends": [
     "config:best-practices"
   ],
+  "dependencyDashboard": true,
+  "dependencyDashboardTitle": "Dependency Updates Dashboard",
+  "schedule": [
+    "on the first day of the month"
+  ],
   "packageRules": [
     {
+      "description": "Group GitHub Actions installation action updates",
       "matchPackageNames": [
         "taiki-e/install-action"
       ],
@@ -12,6 +18,127 @@
       "schedule": [
         "on the first day of the month"
       ]
+    },
+    {
+      "description": "Group tokio ecosystem updates",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchPackagePatterns": [
+        "^tokio"
+      ],
+      "groupName": "tokio ecosystem",
+      "schedule": [
+        "on the first day of the month"
+      ]
+    },
+    {
+      "description": "Group serde ecosystem updates",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchPackagePatterns": [
+        "^serde"
+      ],
+      "groupName": "serde ecosystem",
+      "schedule": [
+        "on the first day of the month"
+      ]
+    },
+    {
+      "description": "Group Azure SDK updates (pre-1.0, breaking changes possible)",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchPackagePatterns": [
+        "^azure_"
+      ],
+      "groupName": "Azure SDK",
+      "schedule": [
+        "on the first day of the month"
+      ],
+      "reviewers": [
+        "pvandervelde"
+      ]
+    },
+    {
+      "description": "Group cryptography crates updates",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchPackageNames": [
+        "hmac",
+        "sha2",
+        "hex"
+      ],
+      "groupName": "cryptography crates",
+      "schedule": [
+        "on the first day of the month"
+      ]
+    },
+    {
+      "description": "Group dev dependencies separately",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchDepTypes": [
+        "dev-dependencies"
+      ],
+      "groupName": "dev dependencies",
+      "schedule": [
+        "on the first day of the month"
+      ]
+    },
+    {
+      "description": "Prioritize security updates (weekly schedule)",
+      "matchUpdateTypes": [
+        "patch"
+      ],
+      "matchCurrentVersion": "!/^0/",
+      "matchPackagePatterns": [
+        ".*"
+      ],
+      "groupName": "security patches",
+      "schedule": [
+        "before 6am on monday"
+      ],
+      "automerge": false,
+      "labels": [
+        "security"
+      ]
+    },
+    {
+      "description": "Standard dependency updates (monthly)",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "matchCurrentVersion": "!/^0/",
+      "excludePackagePatterns": [
+        "^azure_",
+        "^tokio",
+        "^serde"
+      ],
+      "groupName": "standard dependencies",
+      "schedule": [
+        "on the first day of the month"
+      ],
+      "automerge": false
     }
-  ]
+  ],
+  "cargo": {
+    "rangeStrategy": "bump"
+  },
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": [
+      "security"
+    ],
+    "assignees": [
+      "pvandervelde"
+    ]
+  }
 }
