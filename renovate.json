@@ -90,13 +90,9 @@
       ]
     },
     {
-      "description": "Prioritize security updates (weekly schedule)",
+      "description": "Prioritize security updates including pre-1.0 versions (weekly schedule, takes precedence over ecosystem groups)",
       "matchUpdateTypes": [
         "patch"
-      ],
-      "matchCurrentVersion": "!/^0/",
-      "matchPackagePatterns": [
-        ".*"
       ],
       "groupName": "security patches",
       "schedule": [
@@ -130,7 +126,8 @@
     }
   ],
   "cargo": {
-    "rangeStrategy": "bump"
+    "rangeStrategy": "bump",
+    "minimumReleaseAge": "3 days"
   },
   "vulnerabilityAlerts": {
     "enabled": true,

@@ -202,6 +202,7 @@ skip = []
 # Skip duplicate version checks for crates transitively pulled by Azure SDK
 # The Azure SDK uses outdated http-types (v2.12) which drags in many old versions
 # Once Azure SDK updates to modern http crates, these can be removed
+# TODO: Monitor Azure SDK changelogs quarterly for migration to modern http crates
 skip-tree = [
     { crate = "http-types@2.12.0", reason = "Azure SDK dependency with old transitive deps" },
 ]
