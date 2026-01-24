@@ -6,7 +6,7 @@
 
 - **NEVER** commit to `master` or `main` directly
 - **ALWAYS** create a feature branch before making commits
-- Feature branch naming: `feature<brief-description>` (e.g., `feature/overridable-value`). Never include the task or phase number in the branch name.
+- Feature branch naming: `feature/<brief-description>` (e.g., `feature/overridable-value`). Never include the task or phase number in the branch name.
 - Bug fix branch naming: `fix/<issue-description>`
 
 ## Workflow
