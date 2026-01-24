@@ -24,12 +24,12 @@
       "matchManagers": [
         "cargo"
       ],
-      "matchPackagePatterns": [
-        "^tokio"
-      ],
       "groupName": "tokio ecosystem",
       "schedule": [
         "on the first day of the month"
+      ],
+      "matchPackageNames": [
+        "/^tokio/"
       ]
     },
     {
@@ -37,12 +37,12 @@
       "matchManagers": [
         "cargo"
       ],
-      "matchPackagePatterns": [
-        "^serde"
-      ],
       "groupName": "serde ecosystem",
       "schedule": [
         "on the first day of the month"
+      ],
+      "matchPackageNames": [
+        "/^serde/"
       ]
     },
     {
@@ -50,15 +50,15 @@
       "matchManagers": [
         "cargo"
       ],
-      "matchPackagePatterns": [
-        "^azure_"
-      ],
       "groupName": "Azure SDK",
       "schedule": [
         "on the first day of the month"
       ],
       "reviewers": [
         "pvandervelde"
+      ],
+      "matchPackageNames": [
+        "/^azure_/"
       ]
     },
     {
@@ -113,16 +113,16 @@
         "patch"
       ],
       "matchCurrentVersion": "!/^0/",
-      "excludePackagePatterns": [
-        "^azure_",
-        "^tokio",
-        "^serde"
-      ],
       "groupName": "standard dependencies",
       "schedule": [
         "on the first day of the month"
       ],
-      "automerge": false
+      "automerge": false,
+      "matchPackageNames": [
+        "!/^azure_/",
+        "!/^tokio/",
+        "!/^serde/"
+      ]
     }
   ],
   "cargo": {
