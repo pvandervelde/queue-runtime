@@ -12,21 +12,24 @@ categories = ["api-bindings", "web-programming"]
 readme = "README.md"
 
 [dependencies]
-# Core dependencies
-tokio = { version = "1.0", features = ["full"] }
-tracing = "0.1"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-uuid = { version = "1.0", features = ["v4", "serde"] }
+# Core async runtime with full features for concurrent message processing
+tokio = { version = "1.40", features = ["full"] }
+# Structured logging and tracing
+tracing = "0.1.40"
+# Serialization framework with derive macros for message types
+serde = { version = "1.0.200", features = ["derive"] }
+serde_json = "1.0.120"
+# UUID generation for message identifiers
+uuid = { version = "1.8", features = ["v4", "serde"] }
 
-# Date/time
-chrono = { version = "0.4", features = ["serde"] }
+# Date/time handling for message timestamps
+chrono = { version = "0.4.30", features = ["serde"] }
 
-# Error handling
-thiserror = "1.0"
-anyhow = "1.0"
+# Error handling with derive macros and flexible error types
+thiserror = "1.0.60"
+anyhow = "1.0.80"
 
-# Async traits
+# Async methods in traits (pre-1.0 but stable interface)
 async-trait = "0.1"
 
 # HTTP client
@@ -37,12 +40,12 @@ azure_messaging_servicebus = "0.20"
 azure_core = "0.20"
 azure_identity = "0.20"
 
-# Configuration
-config = "0.14"
+# Configuration file loading from multiple formats
+config = "0.14.0"
 
-# Utilities
+# URL parsing and byte buffer utilities
 url = "2.5"
-bytes = "1.0"
+bytes = "1.5"
 base64 = "0.22"
 urlencoding = "2.1"
 hmac = "0.12"
@@ -51,5 +54,7 @@ hex = "0.4"
 quick-xml = "0.31"
 
 [dev-dependencies]
-tempfile = "3.23"
+# Temporary file creation for tests
+tempfile = "3.13"
+# Tokio testing utilities
 tokio-test = "0.4"
