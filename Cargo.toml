@@ -35,7 +35,10 @@ async-trait = "0.1"
 # HTTP client
 reqwest = { version = "0.12", features = ["json"] }
 
-# Azure Service Bus
+# Azure Service Bus SDK (pre-1.0, monitor for breaking changes)
+# Note: 0.21 has minor updates, 0.31+ has significant API breaking changes
+# Staying at 0.20 for stability. Upgrade requires code refactoring.
+# See: breaking changes in auth module, TokenCredentialOptions removed, etc.
 azure_messaging_servicebus = "0.20"
 azure_core = "0.20"
 azure_identity = "0.20"
@@ -55,6 +58,6 @@ quick-xml = "0.31"
 
 [dev-dependencies]
 # Temporary file creation for tests
-tempfile = "3.13"
+tempfile = "3.24"
 # Tokio testing utilities
-tokio-test = "0.4"
+tokio-test = "0.4.5"
