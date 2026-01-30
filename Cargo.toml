@@ -5,6 +5,7 @@ license = "Apache-2.0"
 name = "queue-runtime"
 repository = "https://github.com/pvandervelde/queue-runtime"
 version = "0.1.0"
+rust-version = "1.70"
 
 # Crate metadata
 keywords = ["github", "webhook", "api"]
