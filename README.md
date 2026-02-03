@@ -59,8 +59,166 @@ queue-runtime = "0.1.0"
 
 ## Quick Start
 
+### Basic Message Sending and Receiving
+
 ```rust
-// TODO: Add quick start example
+use queue_runtime::{QueueClientFactory, QueueConfig, ProviderConfig, InMemoryConfig};
+use queue_runtime::{Message, QueueName};
+use bytes::Bytes;
+use chrono::Duration;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create client with in-memory provider
+    let config = QueueConfig {
+        provider: ProviderConfig::InMemory(InMemoryConfig::default()),
+        ..Default::default()
+    };
+    let client = QueueClientFactory::create_client(config).await?;
+
+    // Create queue name
+    let queue = QueueName::new("my-queue".to_string())?;
+
+    // Send a message
+    let message = Message::new(Bytes::from("Hello, Queue!"));
+    let message_id = client.send_message(&queue, message).await?;
+    println!("Sent message: {}", message_id.as_str());
+
+    // Receive a message
+    let timeout = Duration::seconds(30);
+    if let Some(received) = client.receive_message(&queue, timeout).await? {
+        println!("Received: {:?}", String::from_utf8(received.body.to_vec()));
+
+        // Mark as completed
+        client.complete_message(received.receipt_handle).await?;
+    }
+
+    Ok(())
+}
+```
+
+### Session-Based Ordered Processing
+
+```rust
+use queue_runtime::{QueueClientFactory, QueueConfig, Message, QueueName, SessionId};
+use bytes::Bytes;
+use chrono::Duration;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = QueueClientFactory::create_test_client();
+    let queue = QueueName::new("orders-queue".to_string())?;
+
+    // Send messages with session ID for ordering
+    let session_id = SessionId::new("order-12345".to_string())?;
+    for i in 1..=5 {
+        let mut message = Message::new(Bytes::from(format!("Order step {}", i)));
+        message.session_id = Some(session_id.clone());
+        client.send_message(&queue, message).await?;
+    }
+
+    // Accept session for ordered processing
+    let session = client.accept_session(&queue, Some(session_id.clone())).await?;
+
+    // Process messages in order
+    while let Some(msg) = session.receive_message(Duration::seconds(5)).await? {
+        println!("Processing: {:?}", String::from_utf8(msg.body.to_vec()));
+        session.complete_message(msg.receipt_handle).await?;
+    }
+
+    Ok(())
+}
+```
+
+### Azure Service Bus Example
+
+```rust
+use queue_runtime::{QueueClientFactory, QueueConfig, ProviderConfig, AzureServiceBusConfig};
+use queue_runtime::{Message, QueueName};
+use bytes::Bytes;
+use chrono::Duration;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Configure Azure Service Bus
+    let azure_config = AzureServiceBusConfig {
+        connection_string: Some(std::env::var("AZURE_SERVICEBUS_CONNECTION_STRING")?),
+        namespace: None,
+        auth_method: queue_runtime::providers::AzureAuthMethod::ConnectionString,
+        use_sessions: true,
+        session_timeout: Duration::minutes(5),
+    };
+
+    let config = QueueConfig {
+        provider: ProviderConfig::AzureServiceBus(azure_config),
+        default_timeout: Duration::seconds(30),
+        max_retry_attempts: 3,
+        retry_base_delay: Duration::seconds(2),
+        enable_dead_letter: true,
+    };
+
+    let client = QueueClientFactory::create_client(config).await?;
+    let queue = QueueName::new("production-queue".to_string())?;
+
+    // Send message with custom attributes
+    let mut message = Message::new(Bytes::from(r#"{"event": "webhook"}"#));
+    message.attributes.insert("source".to_string(), "github".to_string());
+    message.attributes.insert("event_type".to_string(), "pull_request".to_string());
+
+    client.send_message(&queue, message).await?;
+
+    Ok(())
+}
+```
+
+### Error Handling and Dead Letter Queues
+
+```rust
+use queue_runtime::{QueueClientFactory, QueueError, Message, QueueName};
+use bytes::Bytes;
+use chrono::Duration;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = QueueClientFactory::create_test_client();
+    let queue = QueueName::new("processing-queue".to_string())?;
+
+    // Receive and process with error handling
+    let timeout = Duration::seconds(30);
+    if let Some(received) = client.receive_message(&queue, timeout).await? {
+        match process_message(&received.body).await {
+            Ok(_) => {
+                // Success - complete the message
+                client.complete_message(received.receipt_handle).await?;
+            }
+            Err(e) if is_retryable(&e) => {
+                // Transient error - abandon for retry
+                println!("Transient error, will retry: {}", e);
+                client.abandon_message(received.receipt_handle).await?;
+            }
+            Err(e) => {
+                // Permanent error - send to dead letter queue
+                println!("Permanent error, moving to DLQ: {}", e);
+                client.dead_letter_message(
+                    received.receipt_handle,
+                    format!("Processing failed: {}", e)
+                ).await?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn process_message(body: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    // Your processing logic here
+    Ok(())
+}
+
+fn is_retryable(error: &Box<dyn std::error::Error>) -> bool {
+    // Determine if error is transient
+    error.to_string().contains("timeout") || error.to_string().contains("unavailable")
+}
 ```
 
 ## Documentation
