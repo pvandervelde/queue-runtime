@@ -50,7 +50,7 @@ config = "0.14.0"
 # URL parsing and manipulation
 url = "2.5.8"
 # Efficient byte buffer handling for message payloads
-bytes = "1.11.0"
+bytes = "1.11.1"
 # Base64 encoding for credentials and tokens
 base64 = "0.22.1"
 # URL encoding for query parameters
