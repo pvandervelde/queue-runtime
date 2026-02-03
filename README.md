@@ -223,8 +223,49 @@ fn is_retryable(error: &Box<dyn std::error::Error>) -> bool {
 
 ## Documentation
 
-- [API Documentation](https://docs.rs/queue-runtime)
-- [Specification](docs/specs/)
+### API Reference
+
+Complete API documentation is available at [docs.rs/queue-runtime](https://docs.rs/queue-runtime).
+
+#### Core Types
+
+- [`QueueClient`](https://docs.rs/queue-runtime/latest/queue_runtime/trait.QueueClient.html) - Main interface for queue operations
+- [`SessionClient`](https://docs.rs/queue-runtime/latest/queue_runtime/trait.SessionClient.html) - Interface for session-based ordered processing
+- [`QueueClientFactory`](https://docs.rs/queue-runtime/latest/queue_runtime/struct.QueueClientFactory.html) - Factory for creating queue clients
+- [`Message`](https://docs.rs/queue-runtime/latest/queue_runtime/struct.Message.html) - Message structure for sending
+- [`ReceivedMessage`](https://docs.rs/queue-runtime/latest/queue_runtime/struct.ReceivedMessage.html) - Message structure for receiving
+
+#### Configuration Types
+
+- [`QueueConfig`](https://docs.rs/queue-runtime/latest/queue_runtime/struct.QueueConfig.html) - Main configuration structure
+- [`ProviderConfig`](https://docs.rs/queue-runtime/latest/queue_runtime/enum.ProviderConfig.html) - Provider-specific configuration
+- [`AzureServiceBusConfig`](https://docs.rs/queue-runtime/latest/queue_runtime/struct.AzureServiceBusConfig.html) - Azure Service Bus configuration
+- [`AwsSqsConfig`](https://docs.rs/queue-runtime/latest/queue_runtime/struct.AwsSqsConfig.html) - AWS SQS configuration
+- [`InMemoryConfig`](https://docs.rs/queue-runtime/latest/queue_runtime/struct.InMemoryConfig.html) - In-memory provider configuration
+
+#### Error Types
+
+- [`QueueError`](https://docs.rs/queue-runtime/latest/queue_runtime/enum.QueueError.html) - Main error type for queue operations
+- [`ValidationError`](https://docs.rs/queue-runtime/latest/queue_runtime/enum.ValidationError.html) - Validation error details
+- [`ConfigurationError`](https://docs.rs/queue-runtime/latest/queue_runtime/enum.ConfigurationError.html) - Configuration error details
+
+### Specifications
+
+- [Architecture Overview](docs/spec/architecture.md) - System architecture and design principles
+- [API Specification](docs/spec/README.md) - Complete specification documents
+- [Provider Specifications](docs/spec/providers.md) - Provider-specific implementation details
+- [Security Model](docs/spec/security.md) - Security considerations and best practices
+
+### Module Documentation
+
+- [Client Module](docs/spec/modules/client.md) - Queue client implementation
+- [Messages](docs/spec/modules/messages.md) - Message handling and serialization
+- [Sessions](docs/spec/modules/sessions.md) - Session-based ordering
+- [Retry Logic](docs/spec/modules/retry.md) - Retry policies and exponential backoff
+- [Dead Letter Queues](docs/spec/modules/dlq.md) - DLQ handling
+- [Azure Provider](docs/spec/modules/azure.md) - Azure Service Bus implementation
+- [AWS Provider](docs/spec/modules/aws.md) - AWS SQS implementation (planned)
+- [Observability](docs/spec/modules/observability.md) - Logging and metrics
 
 ## Examples
 
