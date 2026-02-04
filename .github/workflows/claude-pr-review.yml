@@ -24,12 +24,32 @@ jobs:
                       PR NUMBER: ${{ github.event.pull_request.number }}
 
                       Please review this pull request with a focus on:
+
+                      **Code Quality & Implementation**
                       - Code quality and best practices
                       - Potential bugs or issues
                       - Security implications
                       - Performance considerations
 
+                      **Architecture & Design Consistency**
+                      - Verify changes align with architecture specifications in docs/spec/
+                      - Check if changes follow established architectural patterns and decisions
+                      - Flag any architectural deviations or new patterns not documented in specs
+                      - Identify changes that introduce architectural complexity or coupling
+                      - Verify component boundaries and interfaces match documented architecture
+
+                      **Decision Documentation**
+                      - Flag significant architectural changes that should have an RFC/ADR
+                      - Identify design decisions that warrant documentation
+                      - Check if changes reference relevant RFCs/ADRs when modifying architecturally significant code
+
+                      **Safety-Critical Considerations** (for firmware/embedded changes)
+                      - Verify real-time constraints and timing assumptions
+                      - Check for proper error handling in safety-critical paths
+                      - Validate state machine changes against documented behavior
+
                       Provide detailed feedback using inline comments for specific issues.
+                      For architectural concerns, reference the specific spec document in docs/spec/ that's relevant.
 
                   claude_args: |
                       --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
