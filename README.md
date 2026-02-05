@@ -267,6 +267,296 @@ Complete API documentation is available at [docs.rs/queue-runtime](https://docs.
 - [AWS Provider](docs/spec/modules/aws.md) - AWS SQS implementation (planned)
 - [Observability](docs/spec/modules/observability.md) - Logging and metrics
 
+## Configuration
+
+### Azure Service Bus Configuration
+
+#### Connection String Authentication
+
+The simplest way to connect to Azure Service Bus is using a connection string:
+
+```rust
+use queue_runtime::{QueueConfig, ProviderConfig, AzureServiceBusConfig};
+use queue_runtime::providers::AzureAuthMethod;
+use chrono::Duration;
+
+let config = QueueConfig {
+    provider: ProviderConfig::AzureServiceBus(AzureServiceBusConfig {
+        connection_string: Some("Endpoint=sb://your-namespace.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=YOUR_KEY".to_string()),
+        namespace: None,
+        auth_method: AzureAuthMethod::ConnectionString,
+        use_sessions: true,
+        session_timeout: Duration::minutes(5),
+    }),
+    default_timeout: Duration::seconds(30),
+    max_retry_attempts: 3,
+    retry_base_delay: Duration::seconds(2),
+    enable_dead_letter: true,
+};
+```
+
+**Environment Variable Setup:**
+
+```bash
+export AZURE_SERVICEBUS_CONNECTION_STRING="Endpoint=sb://...;SharedAccessKey=..."
+```
+
+Then in your code:
+
+```rust
+let connection_string = std::env::var("AZURE_SERVICEBUS_CONNECTION_STRING")?;
+let azure_config = AzureServiceBusConfig {
+    connection_string: Some(connection_string),
+    namespace: None,
+    auth_method: AzureAuthMethod::ConnectionString,
+    use_sessions: true,
+    session_timeout: Duration::minutes(5),
+};
+```
+
+#### Managed Identity Authentication (Recommended for Production)
+
+For production deployments in Azure, use Managed Identity for passwordless authentication:
+
+```rust
+use queue_runtime::{AzureServiceBusConfig, AzureAuthMethod};
+use chrono::Duration;
+
+let azure_config = AzureServiceBusConfig {
+    connection_string: None,
+    namespace: Some("your-namespace".to_string()),
+    auth_method: AzureAuthMethod::ManagedIdentity,
+    use_sessions: true,
+    session_timeout: Duration::minutes(5),
+};
+```
+
+**Environment Variable Setup:**
+
+```bash
+# Only namespace required for managed identity
+export AZURE_SERVICEBUS_NAMESPACE="your-namespace"
+```
+
+#### Service Principal Authentication
+
+For development or CI/CD pipelines, use a service principal:
+
+```rust
+use queue_runtime::{AzureServiceBusConfig, AzureAuthMethod};
+use chrono::Duration;
+
+let azure_config = AzureServiceBusConfig {
+    connection_string: None,
+    namespace: Some(std::env::var("AZURE_SERVICEBUS_NAMESPACE")?),
+    auth_method: AzureAuthMethod::ClientSecret {
+        tenant_id: std::env::var("AZURE_TENANT_ID")?,
+        client_id: std::env::var("AZURE_CLIENT_ID")?,
+        client_secret: std::env::var("AZURE_CLIENT_SECRET")?,
+    },
+    use_sessions: true,
+    session_timeout: Duration::minutes(5),
+};
+```
+
+**Environment Variable Setup:**
+
+```bash
+export AZURE_TENANT_ID="your-tenant-id"
+export AZURE_CLIENT_ID="your-client-id"
+export AZURE_CLIENT_SECRET="your-client-secret"
+export AZURE_SERVICEBUS_NAMESPACE="your-namespace"
+```
+
+### AWS SQS Configuration (Planned)
+
+AWS SQS support is planned for a future release. The configuration will support:
+
+```rust
+use queue_runtime::{QueueConfig, ProviderConfig, AwsSqsConfig};
+
+let config = QueueConfig {
+    provider: ProviderConfig::AwsSqs(AwsSqsConfig {
+        region: "us-east-1".to_string(),
+        access_key_id: Some(std::env::var("AWS_ACCESS_KEY_ID").ok()),
+        secret_access_key: Some(std::env::var("AWS_SECRET_ACCESS_KEY").ok()),
+        use_fifo_queues: true,
+    }),
+    default_timeout: Duration::seconds(30),
+    max_retry_attempts: 3,
+    retry_base_delay: Duration::seconds(2),
+    enable_dead_letter: true,
+};
+```
+
+### In-Memory Provider Configuration
+
+For testing and development, use the in-memory provider:
+
+```rust
+use queue_runtime::{QueueConfig, ProviderConfig, InMemoryConfig};
+use chrono::Duration;
+
+let config = QueueConfig {
+    provider: ProviderConfig::InMemory(InMemoryConfig {
+        max_queue_size: 10000,
+        enable_persistence: false,
+        max_delivery_count: 3,
+        default_message_ttl: Some(Duration::hours(24)),
+        enable_dead_letter_queue: true,
+        session_lock_duration: Duration::minutes(5),
+    }),
+    default_timeout: Duration::seconds(30),
+    max_retry_attempts: 3,
+    retry_base_delay: Duration::seconds(1),
+    enable_dead_letter: true,
+};
+```
+
+Or use the test factory for quick setup:
+
+```rust
+let client = QueueClientFactory::create_test_client();
+```
+
+### Retry Configuration
+
+Configure automatic retry behavior for transient failures:
+
+```rust
+let config = QueueConfig {
+    provider: /* your provider config */,
+    default_timeout: Duration::seconds(30),
+    max_retry_attempts: 5,              // Retry up to 5 times
+    retry_base_delay: Duration::seconds(2),  // Start with 2s delay
+    enable_dead_letter: true,
+};
+```
+
+The retry mechanism uses **exponential backoff with jitter**:
+
+- First retry: ~2 seconds
+- Second retry: ~4 seconds
+- Third retry: ~8 seconds
+- And so on...
+
+Messages that exceed `max_retry_attempts` are automatically moved to the dead letter queue if `enable_dead_letter` is true.
+
+### Dead Letter Queue Configuration
+
+Dead letter queues (DLQ) capture messages that cannot be processed successfully:
+
+```rust
+let config = QueueConfig {
+    provider: /* your provider config */,
+    enable_dead_letter: true,  // Enable automatic DLQ routing
+    max_retry_attempts: 3,     // Move to DLQ after 3 failed attempts
+    /* other settings */
+};
+```
+
+**Manually sending to DLQ:**
+
+```rust
+if let Some(msg) = client.receive_message(&queue, timeout).await? {
+    match process_message(&msg).await {
+        Ok(_) => client.complete_message(msg.receipt_handle).await?,
+        Err(e) => {
+            // Send to DLQ with error reason
+            client.dead_letter_message(
+                msg.receipt_handle,
+                format!("Processing failed: {}", e)
+            ).await?;
+        }
+    }
+}
+```
+
+### Session Configuration
+
+Configure session-based ordered processing:
+
+```rust
+// Azure Service Bus (native session support)
+let azure_config = AzureServiceBusConfig {
+    connection_string: Some(connection_string),
+    namespace: None,
+    auth_method: AzureAuthMethod::ConnectionString,
+    use_sessions: true,               // Enable session support
+    session_timeout: Duration::minutes(5),  // Session lock timeout
+};
+
+// In-memory provider (for testing)
+let memory_config = InMemoryConfig {
+    session_lock_duration: Duration::minutes(5),  // Session lock timeout
+    ..Default::default()
+};
+```
+
+### Environment-Based Configuration
+
+Create environment-specific configurations:
+
+```rust
+use queue_runtime::*;
+
+pub fn create_queue_config() -> Result<QueueConfig, Box<dyn std::error::Error>> {
+    let env = std::env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string());
+
+    match env.as_str() {
+        "production" => Ok(QueueConfig {
+            provider: ProviderConfig::AzureServiceBus(AzureServiceBusConfig {
+                connection_string: None,
+                namespace: Some(std::env::var("AZURE_SERVICEBUS_NAMESPACE")?),
+                auth_method: AzureAuthMethod::ManagedIdentity,
+                use_sessions: true,
+                session_timeout: Duration::minutes(5),
+            }),
+            default_timeout: Duration::seconds(60),
+            max_retry_attempts: 5,
+            retry_base_delay: Duration::seconds(2),
+            enable_dead_letter: true,
+        }),
+
+        "staging" => Ok(QueueConfig {
+            provider: ProviderConfig::AzureServiceBus(AzureServiceBusConfig {
+                connection_string: Some(std::env::var("AZURE_SERVICEBUS_CONNECTION_STRING")?),
+                namespace: None,
+                auth_method: AzureAuthMethod::ConnectionString,
+                use_sessions: true,
+                session_timeout: Duration::minutes(5),
+            }),
+            default_timeout: Duration::seconds(30),
+            max_retry_attempts: 3,
+            retry_base_delay: Duration::seconds(2),
+            enable_dead_letter: true,
+        }),
+
+        _ => Ok(QueueConfig {
+            provider: ProviderConfig::InMemory(InMemoryConfig::default()),
+            default_timeout: Duration::seconds(10),
+            max_retry_attempts: 2,
+            retry_base_delay: Duration::seconds(1),
+            enable_dead_letter: false,
+        }),
+    }
+}
+```
+
+### Configuration Best Practices
+
+1. **Use Managed Identity in Production**: Avoid storing connection strings in code or environment variables for production deployments on Azure.
+
+2. **Set Appropriate Timeouts**: Match `default_timeout` to your expected message processing time. Too short causes unnecessary retries; too long delays error detection.
+
+3. **Configure Retry Limits**: Set `max_retry_attempts` based on your failure rate tolerance. More retries = higher success rate but longer delays.
+
+4. **Enable Dead Letter Queues**: Always enable DLQ in production to prevent message loss and allow debugging failed messages.
+
+5. **Session Timeout Balance**: Set `session_timeout` long enough for message processing but short enough to recover from failures quickly (typically 5-10 minutes).
+
+6. **Environment-Specific Settings**: Use different retry and timeout values for development, staging, and production environments.
+
 ## Examples
 
 See the [examples/](examples/) directory for complete working examples.
