@@ -1,5 +1,12 @@
 # queue-runtime
 
+[![CI](https://github.com/pvandervelde/queue-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/pvandervelde/queue-runtime/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/pvandervelde/queue-runtime/branch/master/graph/badge.svg)](https://codecov.io/gh/pvandervelde/queue-runtime)
+[![Crates.io](https://img.shields.io/crates/v/queue-runtime.svg)](https://crates.io/crates/queue-runtime)
+[![Documentation](https://docs.rs/queue-runtime/badge.svg)](https://docs.rs/queue-runtime)
+[![License](https://img.shields.io/crates/l/queue-runtime.svg)](LICENSE)
+[![Rust Version](https://img.shields.io/badge/rust-1.70%2B-blue.svg)](https://www.rust-lang.org)
+
 A **provider-agnostic queue abstraction** for Rust, enabling reliable message processing across cloud platforms with session-based ordering, automatic retries, and dead letter queue handling.
 
 ## Overview
