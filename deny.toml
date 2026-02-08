@@ -65,8 +65,6 @@ feature-depth = 1
 # A list of advisory IDs to ignore. Note that ignored advisories will still
 # output a note when they are encountered.
 ignore = [
-    # instant is unmaintained but required by Azure SDK (via http-types)
-    { id = "RUSTSEC-2024-0384", reason = "Transitive dependency from Azure SDK (http-types). No alternative available without forking Azure SDK." },
     # paste is unmaintained but required by Azure SDK
     { id = "RUSTSEC-2024-0436", reason = "Transitive dependency from Azure SDK (azure_core). Author archived repo but crate still works." },
 ]
