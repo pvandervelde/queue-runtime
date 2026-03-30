@@ -1,7 +1,7 @@
 //! # Queue Runtime
 //!
 //! Multi-provider queue runtime for reliable message processing with support for
-//! Azure Service Bus, AWS SQS, and in-memory implementations.
+//! Azure Service Bus, AWS SQS, RabbitMQ, NATS, and in-memory implementations.
 //!
 //! This library provides:
 //! - Provider-agnostic queue operations
@@ -12,10 +12,10 @@
 //!
 //! ## Module Organization
 //!
-//! - [rror] - Error types for all queue operations
-//! - [message] - Message structures and receipt handles
-//! - [provider] - Provider types and configuration
-//! - [client] - Client traits and implementations
+//! - [`error`] - Error types for all queue operations
+//! - [`message`] - Message structures and receipt handles
+//! - [`provider`] - Provider types and configuration
+//! - [`client`] - Client traits and implementations
 //!
 //! See specs/interfaces/queue-client.md for complete specification.
 
@@ -38,12 +38,13 @@ pub use message::{
     SessionId, Timestamp,
 };
 pub use provider::{
-    AwsSqsConfig, AzureServiceBusConfig, InMemoryConfig, ProviderConfig, ProviderType, QueueConfig,
-    SessionSupport,
+    AwsSqsConfig, AzureServiceBusConfig, InMemoryConfig, NatsConfig, ProviderConfig, ProviderType,
+    QueueConfig, RabbitMqConfig, SessionSupport,
 };
 pub use providers::{
     AzureAuthMethod, AzureServiceBusProvider, AzureSessionProvider, InMemoryProvider,
-    InMemorySessionProvider,
+    InMemorySessionProvider, NatsError, NatsProvider, NatsSessionProvider, RabbitMqError,
+    RabbitMqProvider, RabbitMqSessionProvider,
 };
 pub use sessions::{
     CompositeKeyStrategy, FallbackStrategy, NoOrderingStrategy, SessionAffinity,
