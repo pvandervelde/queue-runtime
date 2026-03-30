@@ -9,9 +9,7 @@ pub enum ProviderType {
     AzureServiceBus,
     AwsSqs,
     InMemory,
-    /// RabbitMQ via AMQP 0-9-1
     RabbitMq,
-    /// NATS with JetStream
     Nats,
 }
 
@@ -23,7 +21,7 @@ impl ProviderType {
             Self::AwsSqs => SessionSupport::Emulated, // Via FIFO queues
             Self::InMemory => SessionSupport::Native,
             Self::RabbitMq => SessionSupport::Emulated, // Via routing keys and in-memory tracking
-            Self::Nats => SessionSupport::Emulated, // Via JetStream consumer filter subjects
+            Self::Nats => SessionSupport::Emulated,     // Via JetStream consumer filter subjects
         }
     }
 
@@ -41,11 +39,11 @@ impl ProviderType {
     /// Get maximum message size for provider
     pub fn max_message_size(&self) -> usize {
         match self {
-            Self::AzureServiceBus => 1024 * 1024,   // 1MB
-            Self::AwsSqs => 256 * 1024,              // 256KB
-            Self::InMemory => 10 * 1024 * 1024,      // 10MB
-            Self::RabbitMq => 128 * 1024 * 1024,     // 128MB (configurable, practical limit)
-            Self::Nats => 1024 * 1024,               // 1MB (default JetStream max)
+            Self::AzureServiceBus => 1024 * 1024, // 1MB
+            Self::AwsSqs => 256 * 1024,           // 256KB
+            Self::InMemory => 10 * 1024 * 1024,   // 10MB
+            Self::RabbitMq => 128 * 1024 * 1024,  // 128MB (configurable, practical limit)
+            Self::Nats => 1024 * 1024,            // 1MB (default JetStream max)
         }
     }
 }
@@ -89,10 +87,8 @@ pub enum ProviderConfig {
     AzureServiceBus(AzureServiceBusConfig),
     AwsSqs(AwsSqsConfig),
     InMemory(InMemoryConfig),
-    /// RabbitMQ via AMQP 0-9-1
-    RabbitMq(RabbitMqConfig),
-    /// NATS with JetStream
-    Nats(NatsConfig),
+    RabbitMq(crate::providers::rabbitmq::RabbitMqConfig),
+    Nats(crate::providers::nats::NatsConfig),
 }
 
 /// Azure Service Bus configuration
@@ -139,110 +135,6 @@ impl Default for InMemoryConfig {
             default_message_ttl: None,
             enable_dead_letter_queue: true,
             session_lock_duration: Duration::minutes(5),
-        }
-    }
-}
-
-/// RabbitMQ provider configuration using AMQP 0-9-1
-///
-/// # Examples
-///
-/// ```rust
-/// use queue_runtime::RabbitMqConfig;
-/// use chrono::Duration;
-///
-/// let config = RabbitMqConfig {
-///     url: "amqp://guest:guest@localhost:5672".to_string(),
-///     virtual_host: "/".to_string(),
-///     prefetch_count: 10,
-///     session_lock_duration: Duration::minutes(5),
-///     message_ttl: None,
-///     enable_dead_letter: true,
-///     dead_letter_exchange: Some("dlx".to_string()),
-/// };
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RabbitMqConfig {
-    /// AMQP connection URL (e.g. `amqp://user:pass@host:port/vhost`)
-    pub url: String,
-    /// RabbitMQ virtual host (defaults to `/`)
-    pub virtual_host: String,
-    /// Number of messages to prefetch per channel (0 = unlimited)
-    pub prefetch_count: u16,
-    /// Duration to hold a session lock before expiry
-    pub session_lock_duration: Duration,
-    /// Default message time-to-live
-    pub message_ttl: Option<Duration>,
-    /// Whether to enable dead letter queue routing
-    pub enable_dead_letter: bool,
-    /// Name of the dead letter exchange (required when `enable_dead_letter` is true)
-    pub dead_letter_exchange: Option<String>,
-}
-
-impl Default for RabbitMqConfig {
-    fn default() -> Self {
-        Self {
-            url: "amqp://guest:guest@localhost:5672".to_string(),
-            virtual_host: "/".to_string(),
-            prefetch_count: 10,
-            session_lock_duration: Duration::minutes(5),
-            message_ttl: None,
-            enable_dead_letter: true,
-            dead_letter_exchange: Some("dlx".to_string()),
-        }
-    }
-}
-
-/// NATS provider configuration using JetStream
-///
-/// # Examples
-///
-/// ```rust
-/// use queue_runtime::NatsConfig;
-/// use chrono::Duration;
-///
-/// let config = NatsConfig {
-///     url: "nats://localhost:4222".to_string(),
-///     stream_prefix: "queue-runtime".to_string(),
-///     max_deliver: Some(3),
-///     ack_wait: Duration::seconds(30),
-///     session_lock_duration: Duration::minutes(5),
-///     enable_dead_letter: true,
-///     dead_letter_subject_prefix: Some("dlq".to_string()),
-///     credentials_path: None,
-/// };
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NatsConfig {
-    /// NATS server URL (e.g. `nats://localhost:4222` or `nats://user:pass@host:port`)
-    pub url: String,
-    /// Prefix for JetStream stream names (stream name = `{prefix}-{queue_name}`)
-    pub stream_prefix: String,
-    /// Maximum number of delivery attempts before giving up (None = unlimited)
-    pub max_deliver: Option<i64>,
-    /// Duration to wait for ack before re-delivering (visibility timeout analog)
-    pub ack_wait: Duration,
-    /// Duration to hold a session lock before expiry
-    pub session_lock_duration: Duration,
-    /// Whether to enable dead letter queue routing via a separate stream
-    pub enable_dead_letter: bool,
-    /// Subject prefix for dead letter messages (`{prefix}.{queue}`)
-    pub dead_letter_subject_prefix: Option<String>,
-    /// Path to NATS credentials file (`.creds` format)
-    pub credentials_path: Option<String>,
-}
-
-impl Default for NatsConfig {
-    fn default() -> Self {
-        Self {
-            url: "nats://localhost:4222".to_string(),
-            stream_prefix: "queue-runtime".to_string(),
-            max_deliver: Some(3),
-            ack_wait: Duration::seconds(30),
-            session_lock_duration: Duration::minutes(5),
-            enable_dead_letter: true,
-            dead_letter_subject_prefix: Some("dlq".to_string()),
-            credentials_path: None,
         }
     }
 }

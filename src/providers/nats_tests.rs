@@ -5,7 +5,6 @@
 //! Integration tests that need a server should live in a separate suite.
 
 use super::*;
-use crate::provider::NatsConfig;
 use chrono::Duration;
 
 // ============================================================================
@@ -24,10 +23,7 @@ mod config_tests {
         assert_eq!(config.max_deliver, Some(3));
         assert_eq!(config.ack_wait, Duration::seconds(30));
         assert!(config.enable_dead_letter);
-        assert_eq!(
-            config.dead_letter_subject_prefix,
-            Some("dlq".to_string())
-        );
+        assert_eq!(config.dead_letter_subject_prefix, Some("dlq".to_string()));
         assert!(config.credentials_path.is_none());
     }
 
@@ -215,8 +211,7 @@ mod header_tests {
     #[test]
     fn test_session_id_header_roundtrip() {
         let session = SessionId::new("test-session".to_string()).unwrap();
-        let message = Message::new(bytes::Bytes::from("body"))
-            .with_session_id(session.clone());
+        let message = Message::new(bytes::Bytes::from("body")).with_session_id(session.clone());
 
         let headers = NatsProvider::build_headers(&message);
         let opt_headers = Some(headers);
@@ -238,8 +233,8 @@ mod header_tests {
     /// Verify that correlation ID is encoded and decoded correctly.
     #[test]
     fn test_correlation_id_header_roundtrip() {
-        let message = Message::new(bytes::Bytes::from("body"))
-            .with_correlation_id("corr-xyz".to_string());
+        let message =
+            Message::new(bytes::Bytes::from("body")).with_correlation_id("corr-xyz".to_string());
 
         let headers = NatsProvider::build_headers(&message);
         let opt_headers = Some(headers);
@@ -306,7 +301,11 @@ mod error_tests {
         let queue_err = err.to_queue_error();
 
         match queue_err {
-            QueueError::ProviderError { provider, code, message } => {
+            QueueError::ProviderError {
+                provider,
+                code,
+                message,
+            } => {
                 assert_eq!(provider, "nats");
                 assert_eq!(code, "NATS_ERROR");
                 assert!(message.contains("connection refused"));

@@ -62,18 +62,16 @@ use crate::error::QueueError;
 use crate::message::{
     Message, MessageId, QueueName, ReceiptHandle, ReceivedMessage, SessionId, Timestamp,
 };
-use crate::provider::{NatsConfig, ProviderType, SessionSupport};
+use crate::provider::{ProviderType, SessionSupport};
 use async_nats::jetstream::{
-    self,
-    consumer::pull::Config as ConsumerConfig,
-    stream::Config as StreamConfig,
-    AckKind,
+    self, consumer::pull::Config as ConsumerConfig, stream::Config as StreamConfig, AckKind,
     Context as JetStreamContext,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Duration;
 use futures::StreamExt;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -82,6 +80,64 @@ use tracing::{debug, instrument, warn};
 #[cfg(test)]
 #[path = "nats_tests.rs"]
 mod tests;
+
+// ============================================================================
+// Configuration
+// ============================================================================
+
+/// NATS provider configuration using JetStream
+///
+/// # Examples
+///
+/// ```rust
+/// use queue_runtime::NatsConfig;
+/// use chrono::Duration;
+///
+/// let config = NatsConfig {
+///     url: "nats://localhost:4222".to_string(),
+///     stream_prefix: "queue-runtime".to_string(),
+///     max_deliver: Some(3),
+///     ack_wait: Duration::seconds(30),
+///     session_lock_duration: Duration::minutes(5),
+///     enable_dead_letter: true,
+///     dead_letter_subject_prefix: Some("dlq".to_string()),
+///     credentials_path: None,
+/// };
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NatsConfig {
+    /// NATS server URL (e.g. `nats://localhost:4222` or `nats://user:pass@host:port`)
+    pub url: String,
+    /// Prefix for JetStream stream names (stream name = `{prefix}-{queue_name}`)
+    pub stream_prefix: String,
+    /// Maximum number of delivery attempts before giving up (None = unlimited)
+    pub max_deliver: Option<i64>,
+    /// Duration to wait for ack before re-delivering (visibility timeout analog)
+    pub ack_wait: Duration,
+    /// Duration to hold a session lock before expiry
+    pub session_lock_duration: Duration,
+    /// Whether to enable dead letter queue routing via a separate stream
+    pub enable_dead_letter: bool,
+    /// Subject prefix for dead letter messages (`{prefix}.{queue}`)
+    pub dead_letter_subject_prefix: Option<String>,
+    /// Path to NATS credentials file (`.creds` format)
+    pub credentials_path: Option<String>,
+}
+
+impl Default for NatsConfig {
+    fn default() -> Self {
+        Self {
+            url: "nats://localhost:4222".to_string(),
+            stream_prefix: "queue-runtime".to_string(),
+            max_deliver: Some(3),
+            ack_wait: Duration::seconds(30),
+            session_lock_duration: Duration::minutes(5),
+            enable_dead_letter: true,
+            dead_letter_subject_prefix: Some("dlq".to_string()),
+            credentials_path: None,
+        }
+    }
+}
 
 // ============================================================================
 // Error types
@@ -145,14 +201,16 @@ fn nats_safe(s: &str) -> String {
 
 /// Build the NATS subject for a queue.
 fn queue_subject(config: &NatsConfig, queue: &QueueName) -> String {
-    format!("{}.{}", nats_safe(&config.stream_prefix), nats_safe(queue.as_str()))
+    format!(
+        "{}.{}",
+        nats_safe(&config.stream_prefix),
+        nats_safe(queue.as_str())
+    )
 }
 
 /// Build the NATS subject for a session within a queue.
 fn session_subject(config: &NatsConfig, queue: &QueueName, session_id: &SessionId) -> String {
-    let safe_session = session_id
-        .as_str()
-        .replace(['-', '/', ' '], "_");
+    let safe_session = session_id.as_str().replace(['-', '/', ' '], "_");
     format!(
         "{}.{}.session.{}",
         nats_safe(&config.stream_prefix),
@@ -164,7 +222,11 @@ fn session_subject(config: &NatsConfig, queue: &QueueName, session_id: &SessionI
 /// Build the JetStream stream name for a queue.
 fn stream_name(config: &NatsConfig, queue: &QueueName) -> String {
     // JetStream stream names may not contain dots.
-    format!("{}-{}", nats_safe(&config.stream_prefix), nats_safe(queue.as_str()))
+    format!(
+        "{}-{}",
+        nats_safe(&config.stream_prefix),
+        nats_safe(queue.as_str())
+    )
 }
 
 /// Build the dead-letter subject for a queue if DLQ is enabled.
@@ -172,9 +234,10 @@ fn dead_letter_subject(config: &NatsConfig, queue: &QueueName) -> Option<String>
     if !config.enable_dead_letter {
         return None;
     }
-    config.dead_letter_subject_prefix.as_ref().map(|prefix| {
-        format!("{}.{}", nats_safe(prefix), nats_safe(queue.as_str()))
-    })
+    config
+        .dead_letter_subject_prefix
+        .as_ref()
+        .map(|prefix| format!("{}.{}", nats_safe(prefix), nats_safe(queue.as_str())))
 }
 
 // ============================================================================
@@ -221,12 +284,12 @@ impl NatsProvider {
             async_nats::ConnectOptions::new()
         };
 
-        let client = connect_options
-            .connect(&config.url)
-            .await
-            .map_err(|e| {
-                NatsError::new(format!("failed to connect to NATS at '{}': {}", config.url, e))
-            })?;
+        let client = connect_options.connect(&config.url).await.map_err(|e| {
+            NatsError::new(format!(
+                "failed to connect to NATS at '{}': {}",
+                config.url, e
+            ))
+        })?;
 
         let jetstream = jetstream::new(client.clone());
 
@@ -249,10 +312,7 @@ impl NatsProvider {
         let subject = queue_subject(&self.config, queue);
 
         // Subject wildcard: capture both the main subject and all session subjects.
-        let subjects = vec![
-            subject.clone(),
-            format!("{}.session.>", subject),
-        ];
+        let subjects = vec![subject.clone(), format!("{}.session.>", subject)];
 
         let stream_config = StreamConfig {
             name: name.clone(),
@@ -330,24 +390,23 @@ impl NatsProvider {
             ..Default::default()
         };
 
-        let stream = self
-            .jetstream
-            .get_stream(&name)
-            .await
-            .map_err(|e| QueueError::ProviderError {
-                provider: "nats".to_string(),
-                code: "STREAM_GET_FAILED".to_string(),
-                message: format!("failed to get stream '{}': {}", name, e),
-            })?;
+        let stream =
+            self.jetstream
+                .get_stream(&name)
+                .await
+                .map_err(|e| QueueError::ProviderError {
+                    provider: "nats".to_string(),
+                    code: "STREAM_GET_FAILED".to_string(),
+                    message: format!("failed to get stream '{}': {}", name, e),
+                })?;
 
-        let consumer = stream
-            .create_consumer(consumer_config)
-            .await
-            .map_err(|e| QueueError::ProviderError {
+        let consumer = stream.create_consumer(consumer_config).await.map_err(|e| {
+            QueueError::ProviderError {
                 provider: "nats".to_string(),
                 code: "CONSUMER_CREATE_FAILED".to_string(),
                 message: format!("failed to create pull consumer on '{}': {}", name, e),
-            })?;
+            }
+        })?;
 
         Ok(consumer)
     }
@@ -371,7 +430,9 @@ impl NatsProvider {
     }
 
     /// Extract message attributes from NATS headers.
-    fn extract_attributes(headers: &Option<async_nats::header::HeaderMap>) -> HashMap<String, String> {
+    fn extract_attributes(
+        headers: &Option<async_nats::header::HeaderMap>,
+    ) -> HashMap<String, String> {
         let mut attrs = HashMap::new();
         if let Some(hm) = headers {
             for (name, values) in hm.iter() {
@@ -388,9 +449,7 @@ impl NatsProvider {
     }
 
     /// Extract the session ID from NATS headers.
-    fn extract_session_id(
-        headers: &Option<async_nats::header::HeaderMap>,
-    ) -> Option<SessionId> {
+    fn extract_session_id(headers: &Option<async_nats::header::HeaderMap>) -> Option<SessionId> {
         if let Some(hm) = headers {
             if let Some(val) = hm.get("x-session-id") {
                 let id = val.as_str().to_string();
@@ -401,9 +460,7 @@ impl NatsProvider {
     }
 
     /// Extract the correlation ID from NATS headers.
-    fn extract_correlation_id(
-        headers: &Option<async_nats::header::HeaderMap>,
-    ) -> Option<String> {
+    fn extract_correlation_id(headers: &Option<async_nats::header::HeaderMap>) -> Option<String> {
         if let Some(hm) = headers {
             if let Some(val) = hm.get("x-correlation-id") {
                 return Some(val.as_str().to_string());
@@ -426,9 +483,8 @@ impl NatsProvider {
         let body = Bytes::copy_from_slice(&js_message.message.payload);
 
         let now = Timestamp::now();
-        let lock_expires_at = Timestamp::from_datetime(
-            now.as_datetime() + self.config.session_lock_duration,
-        );
+        let lock_expires_at =
+            Timestamp::from_datetime(now.as_datetime() + self.config.session_lock_duration);
 
         let receipt_id = uuid::Uuid::new_v4().to_string();
         let message_id = MessageId::new();
@@ -628,11 +684,12 @@ impl QueueProvider for NatsProvider {
     #[instrument(skip(self, receipt))]
     async fn complete_message(&self, receipt: &ReceiptHandle) -> Result<(), QueueError> {
         let mut in_flight = self.in_flight.lock().await;
-        let entry = in_flight.remove(receipt.handle()).ok_or_else(|| {
-            QueueError::MessageNotFound {
-                receipt: receipt.handle().to_string(),
-            }
-        })?;
+        let entry =
+            in_flight
+                .remove(receipt.handle())
+                .ok_or_else(|| QueueError::MessageNotFound {
+                    receipt: receipt.handle().to_string(),
+                })?;
 
         if Timestamp::now() > entry.lock_expires_at {
             return Err(QueueError::MessageNotFound {
@@ -656,11 +713,12 @@ impl QueueProvider for NatsProvider {
     #[instrument(skip(self, receipt))]
     async fn abandon_message(&self, receipt: &ReceiptHandle) -> Result<(), QueueError> {
         let mut in_flight = self.in_flight.lock().await;
-        let entry = in_flight.remove(receipt.handle()).ok_or_else(|| {
-            QueueError::MessageNotFound {
-                receipt: receipt.handle().to_string(),
-            }
-        })?;
+        let entry =
+            in_flight
+                .remove(receipt.handle())
+                .ok_or_else(|| QueueError::MessageNotFound {
+                    receipt: receipt.handle().to_string(),
+                })?;
 
         if Timestamp::now() > entry.lock_expires_at {
             return Err(QueueError::MessageNotFound {
@@ -688,11 +746,12 @@ impl QueueProvider for NatsProvider {
         reason: &str,
     ) -> Result<(), QueueError> {
         let mut in_flight = self.in_flight.lock().await;
-        let entry = in_flight.remove(receipt.handle()).ok_or_else(|| {
-            QueueError::MessageNotFound {
-                receipt: receipt.handle().to_string(),
-            }
-        })?;
+        let entry =
+            in_flight
+                .remove(receipt.handle())
+                .ok_or_else(|| QueueError::MessageNotFound {
+                    receipt: receipt.handle().to_string(),
+                })?;
 
         if Timestamp::now() > entry.lock_expires_at {
             return Err(QueueError::MessageNotFound {
@@ -738,7 +797,10 @@ impl QueueProvider for NatsProvider {
                     ),
                 })?;
 
-            debug!(reason, dlq_subject, "Message dead-lettered and published to DLQ");
+            debug!(
+                reason,
+                dlq_subject, "Message dead-lettered and published to DLQ"
+            );
         } else {
             debug!(reason, "Message terminated (no DLQ configured)");
         }
@@ -880,11 +942,12 @@ impl SessionProvider for NatsSessionProvider {
         self.check_lock()?;
 
         let mut in_flight = self.in_flight.lock().await;
-        let entry = in_flight.remove(receipt.handle()).ok_or_else(|| {
-            QueueError::MessageNotFound {
-                receipt: receipt.handle().to_string(),
-            }
-        })?;
+        let entry =
+            in_flight
+                .remove(receipt.handle())
+                .ok_or_else(|| QueueError::MessageNotFound {
+                    receipt: receipt.handle().to_string(),
+                })?;
 
         if Timestamp::now() > entry.lock_expires_at {
             return Err(QueueError::MessageNotFound {
@@ -961,13 +1024,18 @@ impl NatsSessionProvider {
     }
 
     /// Ack or nak a message identified by its receipt handle.
-    async fn ack_message(&self, receipt: &ReceiptHandle, kind: SettlementKind) -> Result<(), QueueError> {
+    async fn ack_message(
+        &self,
+        receipt: &ReceiptHandle,
+        kind: SettlementKind,
+    ) -> Result<(), QueueError> {
         let mut in_flight = self.in_flight.lock().await;
-        let entry = in_flight.remove(receipt.handle()).ok_or_else(|| {
-            QueueError::MessageNotFound {
-                receipt: receipt.handle().to_string(),
-            }
-        })?;
+        let entry =
+            in_flight
+                .remove(receipt.handle())
+                .ok_or_else(|| QueueError::MessageNotFound {
+                    receipt: receipt.handle().to_string(),
+                })?;
 
         if Timestamp::now() > entry.lock_expires_at {
             return Err(QueueError::MessageNotFound {
@@ -976,24 +1044,28 @@ impl NatsSessionProvider {
         }
 
         match kind {
-            SettlementKind::Ack => entry
-                .js_message
-                .ack()
-                .await
-                .map_err(|e| QueueError::ProviderError {
-                    provider: "nats".to_string(),
-                    code: "ACK_FAILED".to_string(),
-                    message: format!("session ack failed: {}", e),
-                }),
-            SettlementKind::Nak => entry
-                .js_message
-                .ack_with(AckKind::Nak(None))
-                .await
-                .map_err(|e| QueueError::ProviderError {
-                    provider: "nats".to_string(),
-                    code: "NAK_FAILED".to_string(),
-                    message: format!("session nak failed: {}", e),
-                }),
+            SettlementKind::Ack => {
+                entry
+                    .js_message
+                    .ack()
+                    .await
+                    .map_err(|e| QueueError::ProviderError {
+                        provider: "nats".to_string(),
+                        code: "ACK_FAILED".to_string(),
+                        message: format!("session ack failed: {}", e),
+                    })
+            }
+            SettlementKind::Nak => {
+                entry
+                    .js_message
+                    .ack_with(AckKind::Nak(None))
+                    .await
+                    .map_err(|e| QueueError::ProviderError {
+                        provider: "nats".to_string(),
+                        code: "NAK_FAILED".to_string(),
+                        message: format!("session nak failed: {}", e),
+                    })
+            }
         }
     }
 

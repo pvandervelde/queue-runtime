@@ -5,7 +5,6 @@
 //! broker should live in a separate integration-test suite.
 
 use super::*;
-use crate::provider::RabbitMqConfig;
 use chrono::Duration;
 
 // ============================================================================
@@ -57,10 +56,7 @@ mod config_tests {
     /// Verify that the provider type is correct.
     #[test]
     fn test_provider_type() {
-        assert_eq!(
-            ProviderType::RabbitMq.max_message_size(),
-            128 * 1024 * 1024
-        );
+        assert_eq!(ProviderType::RabbitMq.max_message_size(), 128 * 1024 * 1024);
         assert!(ProviderType::RabbitMq.supports_batching());
         assert_eq!(
             ProviderType::RabbitMq.supports_sessions(),
@@ -132,8 +128,7 @@ mod header_tests {
     #[test]
     fn test_session_id_header_roundtrip() {
         let session = SessionId::new("my-session-123".to_string()).unwrap();
-        let message = Message::new(bytes::Bytes::from("body"))
-            .with_session_id(session.clone());
+        let message = Message::new(bytes::Bytes::from("body")).with_session_id(session.clone());
 
         let props = RabbitMqProvider::build_properties(&message);
         let headers = props.headers().clone();
@@ -156,8 +151,8 @@ mod header_tests {
     /// Verify that correlation ID is preserved in properties.
     #[test]
     fn test_correlation_id_in_properties() {
-        let message = Message::new(bytes::Bytes::from("body"))
-            .with_correlation_id("corr-001".to_string());
+        let message =
+            Message::new(bytes::Bytes::from("body")).with_correlation_id("corr-001".to_string());
 
         let props = RabbitMqProvider::build_properties(&message);
         let corr = props.correlation_id().as_ref().map(|s| s.to_string());
@@ -167,8 +162,7 @@ mod header_tests {
     /// Verify that TTL is encoded as expiration property.
     #[test]
     fn test_ttl_encoded_as_expiration() {
-        let message = Message::new(bytes::Bytes::from("body"))
-            .with_ttl(Duration::seconds(60));
+        let message = Message::new(bytes::Bytes::from("body")).with_ttl(Duration::seconds(60));
 
         let props = RabbitMqProvider::build_properties(&message);
         let expiration = props.expiration().as_ref().map(|s| s.to_string());
@@ -226,7 +220,11 @@ mod error_tests {
         let queue_err = err.to_queue_error();
 
         match queue_err {
-            QueueError::ProviderError { provider, code, message } => {
+            QueueError::ProviderError {
+                provider,
+                code,
+                message,
+            } => {
                 assert_eq!(provider, "rabbitmq");
                 assert_eq!(code, "AMQP_ERROR");
                 assert!(message.contains("connection refused"));

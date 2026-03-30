@@ -59,7 +59,7 @@ use crate::error::QueueError;
 use crate::message::{
     Message, MessageId, QueueName, ReceiptHandle, ReceivedMessage, SessionId, Timestamp,
 };
-use crate::provider::{ProviderType, RabbitMqConfig, SessionSupport};
+use crate::provider::{ProviderType, SessionSupport};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Duration;
@@ -72,6 +72,7 @@ use lapin::{
     types::{AMQPValue, FieldTable, LongString, ShortString},
     BasicProperties, Channel, Connection, ConnectionProperties,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
@@ -80,6 +81,60 @@ use tracing::{debug, instrument, warn};
 #[cfg(test)]
 #[path = "rabbitmq_tests.rs"]
 mod tests;
+
+// ============================================================================
+// Configuration
+// ============================================================================
+
+/// RabbitMQ provider configuration using AMQP 0-9-1
+///
+/// # Examples
+///
+/// ```rust
+/// use queue_runtime::RabbitMqConfig;
+/// use chrono::Duration;
+///
+/// let config = RabbitMqConfig {
+///     url: "amqp://guest:guest@localhost:5672".to_string(),
+///     virtual_host: "/".to_string(),
+///     prefetch_count: 10,
+///     session_lock_duration: Duration::minutes(5),
+///     message_ttl: None,
+///     enable_dead_letter: true,
+///     dead_letter_exchange: Some("dlx".to_string()),
+/// };
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RabbitMqConfig {
+    /// AMQP connection URL (e.g. `amqp://user:pass@host:port/vhost`)
+    pub url: String,
+    /// RabbitMQ virtual host (defaults to `/`)
+    pub virtual_host: String,
+    /// Number of messages to prefetch per channel (0 = unlimited)
+    pub prefetch_count: u16,
+    /// Duration to hold a session lock before expiry
+    pub session_lock_duration: Duration,
+    /// Default message time-to-live
+    pub message_ttl: Option<Duration>,
+    /// Whether to enable dead letter queue routing
+    pub enable_dead_letter: bool,
+    /// Name of the dead letter exchange (required when `enable_dead_letter` is true)
+    pub dead_letter_exchange: Option<String>,
+}
+
+impl Default for RabbitMqConfig {
+    fn default() -> Self {
+        Self {
+            url: "amqp://guest:guest@localhost:5672".to_string(),
+            virtual_host: "/".to_string(),
+            prefetch_count: 10,
+            session_lock_duration: Duration::minutes(5),
+            message_ttl: None,
+            enable_dead_letter: true,
+            dead_letter_exchange: Some("dlx".to_string()),
+        }
+    }
+}
 
 // ============================================================================
 // Error types
@@ -137,9 +192,7 @@ struct InFlightEntry {
 /// Build the session sub-queue name from a queue name and session ID.
 fn session_queue_name(queue: &QueueName, session_id: &SessionId) -> String {
     // Replace characters not valid in AMQP queue names.
-    let safe = session_id
-        .as_str()
-        .replace(['/', ' ', '\\'], "_");
+    let safe = session_id.as_str().replace(['/', ' ', '\\'], "_");
     format!("{}.session.{}", queue.as_str(), safe)
 }
 
@@ -186,7 +239,10 @@ impl RabbitMqProvider {
         let conn = Connection::connect(&config.url, ConnectionProperties::default())
             .await
             .map_err(|e| {
-                RabbitMqError::new(format!("failed to connect to RabbitMQ at '{}': {}", config.url, e))
+                RabbitMqError::new(format!(
+                    "failed to connect to RabbitMQ at '{}': {}",
+                    config.url, e
+                ))
             })?;
 
         debug!(url = %config.url, "Connected to RabbitMQ");
@@ -200,13 +256,13 @@ impl RabbitMqProvider {
 
     /// Open a new AMQP channel, optionally configuring QoS prefetch.
     async fn open_channel(&self) -> Result<Channel, QueueError> {
-        let channel = self
-            .connection
-            .create_channel()
-            .await
-            .map_err(|e| QueueError::ConnectionFailed {
-                message: format!("failed to create AMQP channel: {}", e),
-            })?;
+        let channel =
+            self.connection
+                .create_channel()
+                .await
+                .map_err(|e| QueueError::ConnectionFailed {
+                    message: format!("failed to create AMQP channel: {}", e),
+                })?;
 
         if self.config.prefetch_count > 0 {
             channel
@@ -246,8 +302,10 @@ impl RabbitMqProvider {
             }
         }
 
-        let mut opts = QueueDeclareOptions::default();
-        opts.durable = true;
+        let opts = QueueDeclareOptions {
+            durable: true,
+            ..Default::default()
+        };
 
         channel
             .queue_declare(queue.as_str().into(), opts, args)
@@ -273,8 +331,10 @@ impl RabbitMqProvider {
     ) -> Result<String, QueueError> {
         let name = session_queue_name(queue, session_id);
 
-        let mut opts = QueueDeclareOptions::default();
-        opts.durable = true;
+        let opts = QueueDeclareOptions {
+            durable: true,
+            ..Default::default()
+        };
 
         channel
             .queue_declare(name.as_str().into(), opts, FieldTable::default())
@@ -332,7 +392,10 @@ impl RabbitMqProvider {
                     continue;
                 }
                 if let AMQPValue::LongString(s) = v {
-                    attrs.insert(key.to_string(), String::from_utf8_lossy(s.as_bytes()).to_string());
+                    attrs.insert(
+                        key.to_string(),
+                        String::from_utf8_lossy(s.as_bytes()).to_string(),
+                    );
                 }
             }
         }
@@ -410,11 +473,12 @@ impl RabbitMqProvider {
         requeue: Option<bool>,
     ) -> Result<(), QueueError> {
         let mut in_flight = self.in_flight.lock().await;
-        let entry = in_flight.remove(receipt.handle()).ok_or_else(|| {
-            QueueError::MessageNotFound {
-                receipt: receipt.handle().to_string(),
-            }
-        })?;
+        let entry =
+            in_flight
+                .remove(receipt.handle())
+                .ok_or_else(|| QueueError::MessageNotFound {
+                    receipt: receipt.handle().to_string(),
+                })?;
 
         if Timestamp::now() > entry.lock_expires_at {
             return Err(QueueError::MessageNotFound {
@@ -907,13 +971,18 @@ impl RabbitMqSessionProvider {
     }
 
     /// Ack, nack-requeue, or nack-discard a message identified by its receipt handle.
-    async fn settle(&self, receipt: &ReceiptHandle, requeue: Option<bool>) -> Result<(), QueueError> {
+    async fn settle(
+        &self,
+        receipt: &ReceiptHandle,
+        requeue: Option<bool>,
+    ) -> Result<(), QueueError> {
         let mut in_flight = self.in_flight.lock().await;
-        let entry = in_flight.remove(receipt.handle()).ok_or_else(|| {
-            QueueError::MessageNotFound {
-                receipt: receipt.handle().to_string(),
-            }
-        })?;
+        let entry =
+            in_flight
+                .remove(receipt.handle())
+                .ok_or_else(|| QueueError::MessageNotFound {
+                    receipt: receipt.handle().to_string(),
+                })?;
 
         if Timestamp::now() > entry.lock_expires_at {
             return Err(QueueError::MessageNotFound {

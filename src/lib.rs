@@ -38,9 +38,11 @@ pub use message::{
     SessionId, Timestamp,
 };
 pub use provider::{
-    AwsSqsConfig, AzureServiceBusConfig, InMemoryConfig, NatsConfig, ProviderConfig, ProviderType,
-    QueueConfig, RabbitMqConfig, SessionSupport,
+    AwsSqsConfig, AzureServiceBusConfig, InMemoryConfig, ProviderConfig, ProviderType, QueueConfig,
+    SessionSupport,
 };
+pub use providers::nats::NatsConfig;
+pub use providers::rabbitmq::RabbitMqConfig;
 pub use providers::{
     AzureAuthMethod, AzureServiceBusProvider, AzureSessionProvider, InMemoryProvider,
     InMemorySessionProvider, NatsError, NatsProvider, NatsSessionProvider, RabbitMqError,
