@@ -73,6 +73,7 @@ use async_nats::jetstream::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Duration;
+use futures::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -1038,6 +1039,3 @@ impl NatsSessionProvider {
         }
     }
 }
-
-// Import StreamExt for the consumer message stream iteration.
-use futures::StreamExt;
