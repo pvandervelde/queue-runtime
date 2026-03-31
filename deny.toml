@@ -67,6 +67,13 @@ feature-depth = 1
 ignore = [
     # paste is unmaintained but required by Azure SDK
     { id = "RUSTSEC-2024-0436", reason = "Transitive dependency from Azure SDK (azure_core). Author archived repo but crate still works." },
+    # rustls-pemfile is unmaintained; transitively required by async-nats v0.46.0 via
+    # rustls-native-certs. No upgrade path available until async-nats drops the dependency.
+    { id = "RUSTSEC-2025-0134", reason = "Transitive dependency of async-nats v0.46.0. No safe upgrade available; will be resolved when async-nats migrates away from rustls-pemfile." },
+    # rustls-webpki CRL matching bug; rustls-webpki@0.102.8 is transitively required by
+    # async-nats v0.46.0 and cannot be upgraded without a new async-nats release.
+    # rustls-webpki@0.103.x was upgraded to 0.103.10 (patched) via `cargo update`.
+    { id = "RUSTSEC-2026-0049", reason = "rustls-webpki@0.102.8 is a transitive dependency of async-nats v0.46.0 that cannot be upgraded independently. Impact is limited to CRL revocation checking edge cases. The 0.103.x branch was upgraded to the patched version (0.103.10)." },
 ]
 
 # If this is true, then cargo deny will use the git executable to fetch advisory database.

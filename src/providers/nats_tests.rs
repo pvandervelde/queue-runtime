@@ -322,3 +322,103 @@ mod error_tests {
         assert!(display.contains("test error"));
     }
 }
+
+// ============================================================================
+// Additional coverage tests
+// ============================================================================
+
+mod additional_tests {
+    use super::*;
+
+    /// Verify that nats_safe handles a string that is already safe.
+    #[test]
+    fn test_nats_safe_no_change() {
+        assert_eq!(nats_safe("already_safe_123"), "already_safe_123");
+    }
+
+    /// Verify that nats_safe replaces hyphens and spaces.
+    #[test]
+    fn test_nats_safe_replaces_hyphens_and_spaces() {
+        assert_eq!(nats_safe("my-queue name"), "my_queue_name");
+    }
+
+    /// Verify that queue_subject uses nats_safe on both parts.
+    #[test]
+    fn test_queue_subject_normalises_special_chars() {
+        let config = NatsConfig {
+            stream_prefix: "my-app".to_string(),
+            ..NatsConfig::default()
+        };
+        let queue = QueueName::new("my-queue".to_string()).unwrap();
+        let subject = queue_subject(&config, &queue);
+        assert_eq!(subject, "my_app.my_queue");
+    }
+
+    /// Verify that stream_name uses hyphens as separator (no dots).
+    #[test]
+    fn test_stream_name_has_no_dots() {
+        let config = NatsConfig::default();
+        let queue = QueueName::new("test-queue".to_string()).unwrap();
+        let name = stream_name(&config, &queue);
+        assert!(!name.contains('.'), "Stream names must not contain dots");
+    }
+
+    /// Verify that dead_letter_subject uses nats_safe on both prefix and queue.
+    #[test]
+    fn test_dead_letter_subject_custom_prefix() {
+        let config = NatsConfig {
+            dead_letter_subject_prefix: Some("my-dlq".to_string()),
+            ..NatsConfig::default()
+        };
+        let queue = QueueName::new("my-queue".to_string()).unwrap();
+        let subject = dead_letter_subject(&config, &queue);
+        assert_eq!(subject, Some("my_dlq.my_queue".to_string()));
+    }
+
+    /// Verify that build_headers produces no headers for a minimal message.
+    #[test]
+    fn test_build_headers_empty_message() {
+        let message = Message::new(bytes::Bytes::from("body"));
+        let headers = NatsProvider::build_headers(&message);
+        // No session_id, correlation_id, or attributes → no headers set
+        assert!(headers.get("x-session-id").is_none());
+        assert!(headers.get("x-correlation-id").is_none());
+    }
+
+    /// Verify that multiple attributes all survive a header roundtrip.
+    #[test]
+    fn test_multiple_attributes_roundtrip() {
+        let mut message = Message::new(bytes::Bytes::from("body"));
+        for i in 0..5 {
+            message = message.with_attribute(format!("key-{}", i), format!("val-{}", i));
+        }
+
+        let headers = NatsProvider::build_headers(&message);
+        let opt_headers = Some(headers);
+        let attrs = NatsProvider::extract_attributes(&opt_headers);
+
+        for i in 0..5 {
+            assert_eq!(
+                attrs.get(&format!("key-{}", i)).map(String::as_str),
+                Some(format!("val-{}", i).as_str())
+            );
+        }
+    }
+
+    /// Verify that NatsConfig with no credentials path has None.
+    #[test]
+    fn test_config_no_credentials() {
+        let config = NatsConfig::default();
+        assert!(config.credentials_path.is_none());
+    }
+
+    /// Verify that NatsConfig with max_deliver None works.
+    #[test]
+    fn test_config_unlimited_deliver() {
+        let config = NatsConfig {
+            max_deliver: None,
+            ..NatsConfig::default()
+        };
+        assert!(config.max_deliver.is_none());
+    }
+}

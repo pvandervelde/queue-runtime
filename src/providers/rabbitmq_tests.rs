@@ -198,11 +198,66 @@ mod header_tests {
         assert_eq!(attrs.get("my-key").map(String::as_str), Some("my-value"));
     }
 
-    /// Verify that delivery count defaults to 1 when no header is present.
+    /// Verify that delivery count is extracted from x-delivery-count header.
     #[test]
-    fn test_delivery_count_defaults_to_one() {
-        let count = RabbitMqProvider::extract_delivery_count(&None);
-        assert_eq!(count, 1);
+    fn test_delivery_count_from_header() {
+        let mut headers = FieldTable::default();
+        headers.insert(
+            lapin::types::ShortString::from("x-delivery-count"),
+            lapin::types::AMQPValue::LongLongInt(4),
+        );
+        let count = RabbitMqProvider::extract_delivery_count(&Some(headers));
+        // 4 in header + 1 = 5
+        assert_eq!(count, 5);
+    }
+
+    /// Verify that TTL of zero does not set an expiration property.
+    #[test]
+    fn test_zero_ttl_not_encoded() {
+        let message = Message::new(bytes::Bytes::from("body")).with_ttl(Duration::seconds(0));
+        let props = RabbitMqProvider::build_properties(&message);
+        let expiration = props.expiration().as_ref().map(|s| s.to_string());
+        assert!(expiration.is_none(), "Zero TTL should not set expiration");
+    }
+
+    /// Verify that a message without correlation ID has no correlation_id property.
+    #[test]
+    fn test_no_correlation_id() {
+        let message = Message::new(bytes::Bytes::from("body"));
+        let props = RabbitMqProvider::build_properties(&message);
+        assert!(props.correlation_id().is_none());
+    }
+
+    /// Verify that attributes with non-LongString values are ignored on extraction.
+    #[test]
+    fn test_extract_attributes_ignores_non_string() {
+        let mut headers = FieldTable::default();
+        headers.insert(
+            lapin::types::ShortString::from("int-field"),
+            lapin::types::AMQPValue::LongLongInt(42),
+        );
+        headers.insert(
+            lapin::types::ShortString::from("str-field"),
+            lapin::types::AMQPValue::LongString(lapin::types::LongString::from(b"hello".as_ref())),
+        );
+        let attrs = RabbitMqProvider::extract_attributes(&Some(headers));
+        // Non-string field should be skipped
+        assert!(!attrs.contains_key("int-field"));
+        assert_eq!(attrs.get("str-field").map(String::as_str), Some("hello"));
+    }
+
+    /// Verify that extract_attributes returns empty map for None headers.
+    #[test]
+    fn test_extract_attributes_none_headers() {
+        let attrs = RabbitMqProvider::extract_attributes(&None);
+        assert!(attrs.is_empty());
+    }
+
+    /// Verify that extract_session_id returns None for None headers.
+    #[test]
+    fn test_extract_session_id_none_headers() {
+        let result = RabbitMqProvider::extract_session_id(&None);
+        assert!(result.is_none());
     }
 }
 
