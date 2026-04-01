@@ -192,6 +192,25 @@ struct InFlightEntry {
 // Helper functions
 // ============================================================================
 
+/// Redact any userinfo (username and password) from a URL, keeping host and path.
+///
+/// Used to prevent credential leakage in log fields and error messages when
+/// connection URLs contain embedded credentials
+/// (e.g. `nats://user:pass@host:4222` → `nats://***:***@host:4222`).
+fn redact_url(url: &str) -> String {
+    match url::Url::parse(url) {
+        Ok(mut parsed) => {
+            let has_credentials = !parsed.username().is_empty() || parsed.password().is_some();
+            if has_credentials {
+                let _ = parsed.set_username("***");
+                let _ = parsed.set_password(Some("***"));
+            }
+            parsed.to_string()
+        }
+        Err(_) => "<invalid-url>".to_string(),
+    }
+}
+
 /// Sanitise a queue name for use in NATS subject/stream identifiers.
 ///
 /// NATS subjects use `.` as a separator and do not allow spaces.
@@ -287,13 +306,14 @@ impl NatsProvider {
         let client = connect_options.connect(&config.url).await.map_err(|e| {
             NatsError::new(format!(
                 "failed to connect to NATS at '{}': {}",
-                config.url, e
+                redact_url(&config.url),
+                e
             ))
         })?;
 
         let jetstream = jetstream::new(client.clone());
 
-        debug!(url = %config.url, "Connected to NATS");
+        debug!(url = %redact_url(&config.url), "Connected to NATS");
 
         Ok(Self {
             client,

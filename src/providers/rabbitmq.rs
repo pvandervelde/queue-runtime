@@ -189,6 +189,26 @@ struct InFlightEntry {
 // Helper functions
 // ============================================================================
 
+/// Redact any userinfo (username and password) from a URL, keeping host and path.
+///
+/// Used to prevent credential leakage in log fields and error messages when
+/// connection URLs contain embedded credentials
+/// (e.g. `amqp://user:pass@host:5672` → `amqp://***:***@host:5672`).
+fn redact_url(url: &str) -> String {
+    match url::Url::parse(url) {
+        Ok(mut parsed) => {
+            let has_credentials = !parsed.username().is_empty() || parsed.password().is_some();
+            if has_credentials {
+                // Errors here are non-fatal; fall through to return the redacted form.
+                let _ = parsed.set_username("***");
+                let _ = parsed.set_password(Some("***"));
+            }
+            parsed.to_string()
+        }
+        Err(_) => "<invalid-url>".to_string(),
+    }
+}
+
 /// Build the session sub-queue name from a queue name and session ID.
 fn session_queue_name(queue: &QueueName, session_id: &SessionId) -> String {
     // Replace characters not valid in AMQP queue names.
@@ -241,11 +261,12 @@ impl RabbitMqProvider {
             .map_err(|e| {
                 RabbitMqError::new(format!(
                     "failed to connect to RabbitMQ at '{}': {}",
-                    config.url, e
+                    redact_url(&config.url),
+                    e
                 ))
             })?;
 
-        debug!(url = %config.url, "Connected to RabbitMQ");
+        debug!(url = %redact_url(&config.url), "Connected to RabbitMQ");
 
         Ok(Self {
             connection: Arc::new(conn),
@@ -477,18 +498,30 @@ impl RabbitMqProvider {
         requeue: Option<bool>,
     ) -> Result<(), QueueError> {
         let mut in_flight = self.in_flight.lock().await;
-        let entry =
-            in_flight
-                .remove(receipt.handle())
-                .ok_or_else(|| QueueError::MessageNotFound {
-                    receipt: receipt.handle().to_string(),
-                })?;
 
-        if Timestamp::now() > entry.lock_expires_at {
-            return Err(QueueError::MessageNotFound {
-                receipt: receipt.handle().to_string(),
-            });
+        // Check existence and lock expiry before removal so callers receive a
+        // meaningful error: MessageNotFound for an unknown receipt, and a
+        // separate expiry error for a receipt whose lock has lapsed.  Expired
+        // entries are then pruned to prevent unbounded map growth.
+        match in_flight.get(receipt.handle()) {
+            None => {
+                return Err(QueueError::MessageNotFound {
+                    receipt: receipt.handle().to_string(),
+                });
+            }
+            Some(entry) if Timestamp::now() > entry.lock_expires_at => {
+                // Remove the stale entry and surface a clear expiry error.
+                in_flight.remove(receipt.handle());
+                return Err(QueueError::MessageNotFound {
+                    receipt: format!("{}(expired)", receipt.handle()),
+                });
+            }
+            Some(_) => {}
         }
+
+        let entry = in_flight
+            .remove(receipt.handle())
+            .expect("entry present after pre-check");
 
         match requeue {
             None => {
@@ -707,7 +740,14 @@ impl QueueProvider for RabbitMqProvider {
                         .await;
                     messages.push(msg);
                 }
-                None => break,
+                // Queue is empty; poll with backoff until timeout, mirroring the
+                // behaviour of `receive_message` rather than returning immediately.
+                None => {
+                    if start.elapsed() >= timeout_std {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
             }
         }
 
@@ -1006,18 +1046,26 @@ impl RabbitMqSessionProvider {
         requeue: Option<bool>,
     ) -> Result<(), QueueError> {
         let mut in_flight = self.in_flight.lock().await;
-        let entry =
-            in_flight
-                .remove(receipt.handle())
-                .ok_or_else(|| QueueError::MessageNotFound {
-                    receipt: receipt.handle().to_string(),
-                })?;
 
-        if Timestamp::now() > entry.lock_expires_at {
-            return Err(QueueError::MessageNotFound {
-                receipt: receipt.handle().to_string(),
-            });
+        // Check existence and lock expiry before removal (mirrors settle_message).
+        match in_flight.get(receipt.handle()) {
+            None => {
+                return Err(QueueError::MessageNotFound {
+                    receipt: receipt.handle().to_string(),
+                });
+            }
+            Some(entry) if Timestamp::now() > entry.lock_expires_at => {
+                in_flight.remove(receipt.handle());
+                return Err(QueueError::MessageNotFound {
+                    receipt: format!("{}(expired)", receipt.handle()),
+                });
+            }
+            Some(_) => {}
         }
+
+        let entry = in_flight
+            .remove(receipt.handle())
+            .expect("entry present after pre-check");
 
         match requeue {
             None => {
