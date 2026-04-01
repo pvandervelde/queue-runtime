@@ -75,7 +75,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, instrument, warn};
+use tracing::{debug, instrument};
 
 #[cfg(test)]
 #[path = "nats_tests.rs"]
@@ -577,6 +577,7 @@ impl QueueProvider for NatsProvider {
             });
         }
 
+        // JetStream has no multi-message publish API; messages are sent sequentially.
         let mut ids = Vec::with_capacity(messages.len());
         for message in messages {
             ids.push(self.send_message(queue, message).await?);
@@ -839,7 +840,7 @@ impl QueueProvider for NatsProvider {
             session_id: sid,
             queue_name: queue.clone(),
             in_flight: self.in_flight.clone(),
-            lock_expires_at,
+            lock_expires_at: Arc::new(std::sync::Mutex::new(lock_expires_at)),
             config: self.config.clone(),
         }))
     }
@@ -876,7 +877,8 @@ pub struct NatsSessionProvider {
     session_id: SessionId,
     queue_name: QueueName,
     in_flight: Arc<Mutex<HashMap<String, InFlightEntry>>>,
-    lock_expires_at: Timestamp,
+    /// Current session-lock expiry; shared so `renew_session_lock` can update it.
+    lock_expires_at: Arc<std::sync::Mutex<Timestamp>>,
     config: NatsConfig,
 }
 
@@ -987,7 +989,18 @@ impl SessionProvider for NatsSessionProvider {
     }
 
     async fn renew_session_lock(&self) -> Result<(), QueueError> {
-        warn!("NATS session lock renewal extends the in-memory lock only");
+        let new_expiry = Timestamp::from_datetime(
+            Timestamp::now().as_datetime() + self.config.session_lock_duration,
+        );
+        *self
+            .lock_expires_at
+            .lock()
+            .map_err(|_| QueueError::ProviderError {
+                provider: "nats".to_string(),
+                code: "INTERNAL_ERROR".to_string(),
+                message: "session lock mutex poisoned".to_string(),
+            })? = new_expiry;
+        debug!(session_id = %self.session_id, "NATS session lock renewed");
         Ok(())
     }
 
@@ -1001,7 +1014,11 @@ impl SessionProvider for NatsSessionProvider {
     }
 
     fn session_expires_at(&self) -> Timestamp {
-        self.lock_expires_at
+        // Recover from a poisoned lock by using the last known value.
+        *self
+            .lock_expires_at
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 }
 
@@ -1014,10 +1031,18 @@ enum SettlementKind {
 impl NatsSessionProvider {
     /// Return an error if the session lock has expired.
     fn check_lock(&self) -> Result<(), QueueError> {
-        if Timestamp::now() > self.lock_expires_at {
+        let expires = *self
+            .lock_expires_at
+            .lock()
+            .map_err(|_| QueueError::ProviderError {
+                provider: "nats".to_string(),
+                code: "INTERNAL_ERROR".to_string(),
+                message: "session lock mutex poisoned".to_string(),
+            })?;
+        if Timestamp::now() > expires {
             return Err(QueueError::SessionLocked {
                 session_id: self.session_id.as_str().to_string(),
-                locked_until: self.lock_expires_at,
+                locked_until: expires,
             });
         }
         Ok(())

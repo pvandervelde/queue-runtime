@@ -421,4 +421,21 @@ mod additional_tests {
         };
         assert!(config.max_deliver.is_none());
     }
+
+    /// Verify that the session lock duration is used correctly.
+    #[test]
+    fn test_session_lock_duration_default() {
+        let config = NatsConfig::default();
+        assert_eq!(config.session_lock_duration, Duration::minutes(5));
+    }
+
+    /// Verify that a custom session lock duration is respected.
+    #[test]
+    fn test_session_lock_duration_custom() {
+        let config = NatsConfig {
+            session_lock_duration: Duration::minutes(20),
+            ..NatsConfig::default()
+        };
+        assert_eq!(config.session_lock_duration, Duration::minutes(20));
+    }
 }

@@ -20,7 +20,7 @@ Most cloud-native applications deploy the same binary across environments (dev u
 
 **Provider selection happens at runtime via `ProviderConfig` enum and `QueueClientFactory`.**
 
-- `ProviderConfig` is an enum with variants: `AzureServiceBus(AzureServiceBusConfig)`, `AwsSqs(AwsSqsConfig)`, `InMemory(InMemoryConfig)`
+- `ProviderConfig` is an enum with variants: `AzureServiceBus(AzureServiceBusConfig)`, `AwsSqs(AwsSqsConfig)`, `InMemory(InMemoryConfig)`, `RabbitMq(RabbitMqConfig)`, `Nats(NatsConfig)`
 - `QueueClientFactory` is a factory function that inspects `ProviderConfig` and returns a `Box<dyn QueueClient>`
 - Provider is selected at application startup, typically from environment variables or configuration files
 - No compile-time feature flags for provider selection
@@ -129,6 +129,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             queue_name: std::env::var("QUEUE_NAME")?,
             ..Default::default()
         })
+    } else if let Ok(amqp_url) = std::env::var("RABBITMQ_URL") {
+        tracing::info!("Using RabbitMQ provider");
+        ProviderConfig::RabbitMq(RabbitMqConfig {
+            url: amqp_url,
+            ..RabbitMqConfig::default()
+        })
+    } else if let Ok(nats_url) = std::env::var("NATS_URL") {
+        tracing::info!("Using NATS JetStream provider");
+        ProviderConfig::Nats(NatsConfig {
+            url: nats_url,
+            ..NatsConfig::default()
+        })
     } else {
         tracing::info!("Using in-memory provider (local development)");
         ProviderConfig::InMemory(InMemoryConfig::default())
@@ -164,6 +176,14 @@ impl QueueClientFactory {
                 let provider = InMemoryProvider::new(memory_config);
                 Ok(Box::new(StandardQueueClient::new(Box::new(provider))))
             }
+            ProviderConfig::RabbitMq(rabbitmq_config) => {
+                let provider = RabbitMqProvider::new(rabbitmq_config).await?;
+                Ok(Box::new(StandardQueueClient::new(Box::new(provider))))
+            }
+            ProviderConfig::Nats(nats_config) => {
+                let provider = NatsProvider::new(nats_config).await?;
+                Ok(Box::new(StandardQueueClient::new(Box::new(provider))))
+            }
         }
     }
 }
@@ -173,4 +193,5 @@ impl QueueClientFactory {
 
 - [Architecture Spec - Runtime Selection](../spec/architecture.md#runtime-selection)
 - [Hexagonal Architecture ADR](./ADR-001-hexagonal-architecture.md)
+- [Provider Differences Spec](../spec/providers.md)
 - [12-Factor App - Store Config in Environment](https://12factor.net/config)

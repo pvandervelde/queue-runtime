@@ -381,14 +381,18 @@ impl RabbitMqProvider {
         props.with_headers(headers)
     }
 
-    /// Extract message attributes from AMQP headers, skipping internal `x-*` keys.
+    /// Extract message attributes from AMQP headers, skipping all `x-`-prefixed headers.
+    ///
+    /// AMQP convention reserves the `x-` prefix for extension / broker-managed headers
+    /// (e.g. `x-session-id`, `x-delivery-count`, `x-death`).  User attributes are stored
+    /// without the `x-` prefix, so this filter is safe to apply broadly.
     fn extract_attributes(headers: &Option<FieldTable>) -> HashMap<String, String> {
         let mut attrs = HashMap::new();
         if let Some(ht) = headers {
             for (k, v) in ht.inner() {
                 let key = k.as_str();
-                // Skip AMQP-internal headers used by the provider itself.
-                if key.starts_with("x-session-id") || key.starts_with("x-delivery-count") {
+                // Skip AMQP extension headers (provider-managed and broker-managed).
+                if key.starts_with("x-") {
                     continue;
                 }
                 if let AMQPValue::LongString(s) = v {
@@ -593,6 +597,7 @@ impl QueueProvider for RabbitMqProvider {
             });
         }
 
+        // AMQP 0-9-1 has no native batch-publish command; messages are sent sequentially.
         let mut ids = Vec::with_capacity(messages.len());
         for message in messages {
             ids.push(self.send_message(queue, message).await?);
@@ -726,7 +731,9 @@ impl QueueProvider for RabbitMqProvider {
         reason: &str,
     ) -> Result<(), QueueError> {
         debug!(reason, "Dead-lettering RabbitMQ message");
-        // Nack without requeue; RabbitMQ routes to the DLX when configured.
+        // The `reason` argument is logged but cannot be forwarded to the DLX because the
+        // AMQP `basic_nack` command carries no metadata payload.  Use the NATS provider
+        // if dead-letter reason propagation is required.
         self.settle_message(receipt, Some(false)).await
     }
 
@@ -802,7 +809,7 @@ impl QueueProvider for RabbitMqProvider {
             deliveries: Arc::new(Mutex::new(rx)),
             session_id: sid,
             in_flight: self.in_flight.clone(),
-            lock_expires_at,
+            lock_expires_at: Arc::new(std::sync::Mutex::new(lock_expires_at)),
             config: self.config.clone(),
         }))
     }
@@ -839,7 +846,8 @@ pub struct RabbitMqSessionProvider {
     deliveries: Arc<Mutex<mpsc::UnboundedReceiver<lapin::message::Delivery>>>,
     session_id: SessionId,
     in_flight: Arc<Mutex<HashMap<String, InFlightEntry>>>,
-    lock_expires_at: Timestamp,
+    /// Current session-lock expiry; shared so `renew_session_lock` can update it.
+    lock_expires_at: Arc<std::sync::Mutex<Timestamp>>,
     config: RabbitMqConfig,
 }
 
@@ -891,9 +899,18 @@ impl SessionProvider for RabbitMqSessionProvider {
     }
 
     async fn renew_session_lock(&self) -> Result<(), QueueError> {
-        // Session lock is tracked in-memory.  A full implementation would
-        // update `lock_expires_at` via an `Arc<Mutex<Timestamp>>`.
-        warn!("RabbitMQ session lock renewal extends the in-memory lock only");
+        let new_expiry = Timestamp::from_datetime(
+            Timestamp::now().as_datetime() + self.config.session_lock_duration,
+        );
+        *self
+            .lock_expires_at
+            .lock()
+            .map_err(|_| QueueError::ProviderError {
+                provider: "rabbitmq".to_string(),
+                code: "INTERNAL_ERROR".to_string(),
+                message: "session lock mutex poisoned".to_string(),
+            })? = new_expiry;
+        debug!(session_id = %self.session_id, "RabbitMQ session lock renewed");
         Ok(())
     }
 
@@ -909,17 +926,29 @@ impl SessionProvider for RabbitMqSessionProvider {
     }
 
     fn session_expires_at(&self) -> Timestamp {
-        self.lock_expires_at
+        // Recover from a poisoned lock by using the last known value.
+        *self
+            .lock_expires_at
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 }
 
 impl RabbitMqSessionProvider {
     /// Return an error if the session lock has expired.
     fn check_lock(&self) -> Result<(), QueueError> {
-        if Timestamp::now() > self.lock_expires_at {
+        let expires = *self
+            .lock_expires_at
+            .lock()
+            .map_err(|_| QueueError::ProviderError {
+                provider: "rabbitmq".to_string(),
+                code: "INTERNAL_ERROR".to_string(),
+                message: "session lock mutex poisoned".to_string(),
+            })?;
+        if Timestamp::now() > expires {
             return Err(QueueError::SessionLocked {
                 session_id: self.session_id.as_str().to_string(),
-                locked_until: self.lock_expires_at,
+                locked_until: expires,
             });
         }
         Ok(())

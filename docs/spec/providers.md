@@ -8,17 +8,18 @@ The queue-runtime provides a unified abstraction over different cloud message qu
 
 ## Provider Comparison Matrix
 
-| Feature | Azure Service Bus | AWS SQS | In-Memory |
-|---------|------------------|----------|-----------|
-| **Ordered Processing** | Native Sessions | FIFO Queues | Simple Ordering |
-| **Dead Letter Queues** | Built-in | Built-in | Simulated |
-| **Message Deduplication** | Native Support | Content-based | Hash-based |
-| **Batch Operations** | Send/Receive Batches | Send/Receive Batches | Full Batching |
-| **Message Size Limit** | 1MB (Premium) | 256KB | Memory Limited |
-| **Session Support** | First-class | Via Message Groups | Thread-based |
-| **Transactional Operations** | Limited | No | Yes |
-| **Peek Operations** | Supported | No | Yes |
-| **Authentication** | Azure AD/Managed Identity | IAM Roles | N/A |
+| Feature | Azure Service Bus | AWS SQS | In-Memory | RabbitMQ | NATS JetStream |
+|---------|------------------|----------|-----------|----------|----------------|
+| **Ordered Processing** | Native Sessions | FIFO Queues | Simple Ordering | Per-session queues | Per-session subjects |
+| **Dead Letter Queues** | Built-in | Built-in | Simulated | Via DLX | Via Term + DLQ stream |
+| **Message Deduplication** | Native Support | Content-based | Hash-based | None | None |
+| **Batch Operations** | Send/Receive Batches | Send/Receive Batches | Full Batching | Sequential loop | Sequential loop |
+| **Message Size Limit** | 1MB (Premium) | 256KB | Memory Limited | 128MB | 1MB (server default) |
+| **Session Support** | First-class | Via Message Groups | Thread-based | Emulated (sub-queues) | Emulated (filter subjects) |
+| **Transactional Operations** | Limited | No | Yes | No | No |
+| **Peek Operations** | Supported | No | Yes | No | No |
+| **Authentication** | Azure AD/Managed Identity | IAM Roles | N/A | AMQP credentials | NATS credentials/NKey |
+| **Dead-letter reason** | Preserved | Preserved | N/A | Not forwarded (AMQP limitation) | Forwarded as header |
 
 ## Azure Service Bus Implementation
 
@@ -187,6 +188,83 @@ pub struct InMemoryConfig {
 }
 ```
 
+## RabbitMQ Implementation
+
+**Status**: ✅ **Implemented** — AMQP 0-9-1 via the `lapin` crate.
+
+### Session Management
+
+**Emulated via Per-Session Sub-Queues**:
+
+- Sessions are emulated by routing messages with a `session_id` to a dedicated AMQP queue named `{queue}.session.{session_id}`
+- An exclusive consumer on the session queue provides mutual exclusion
+- Session lock is tracked in-memory and renewable via `renew_session_lock`
+
+### Dead Letter Support
+
+- Set `enable_dead_letter = true` and specify a `dead_letter_exchange` to enable automatic DLX binding
+- Messages dead-lettered via `dead_letter_message` are nacked without requeue; RabbitMQ routes them through the DLX
+- **Note**: The dead-letter reason string is logged but **not forwarded** to the DLX because the AMQP `basic_nack` command carries no metadata
+
+### Key Characteristics
+
+- Maximum message size: **128 MB** (governed by the broker's `max-frame-size` setting)
+- Delivery mode 2 (persistent) for all messages
+- QoS prefetch configurable via `prefetch_count`
+- `send_messages` sends sequentially (no native batch-publish in AMQP 0-9-1)
+
+```rust
+// RabbitMQ configuration
+pub struct RabbitMqConfig {
+    pub url: String,                         // amqp://user:pass@host:5672/vhost
+    pub virtual_host: String,                // defaults to "/"
+    pub prefetch_count: u16,                 // 0 = unlimited
+    pub session_lock_duration: Duration,
+    pub message_ttl: Option<Duration>,
+    pub enable_dead_letter: bool,
+    pub dead_letter_exchange: Option<String>,
+}
+```
+
+## NATS JetStream Implementation
+
+**Status**: ✅ **Implemented** — JetStream via the `async-nats` crate.
+
+### Session Management
+
+**Emulated via Per-Session Filter Subjects**:
+
+- One JetStream stream per queue with `WorkQueue` retention policy
+- Sessions use a dedicated filter subject: `{prefix}.{queue}.session.{session_id}`
+- A per-session pull consumer filtered to the session subject provides ordered, exclusive delivery
+- Session lock is tracked in-memory and renewable via `renew_session_lock`
+
+### Dead Letter Support
+
+- Requires `enable_dead_letter = true` and `dead_letter_subject_prefix` to be set
+- Dead-lettered messages receive `ack_with(Term)` (stops JetStream redelivery) and are republished to `{prefix}.{queue}` on a separate DLQ stream
+- The dead-letter reason is forwarded as an `x-dead-letter-reason` NATS header
+
+### Key Characteristics
+
+- Maximum message size: **1 MB** (NATS server default; configurable on the server)
+- `WorkQueue` stream retention ensures at-most-once delivery per consumer
+- `send_messages` sends sequentially (no multi-message JetStream publish API)
+
+```rust
+// NATS JetStream configuration
+pub struct NatsConfig {
+    pub url: String,                              // nats://host:4222
+    pub stream_prefix: String,                    // defaults to "queue-runtime"
+    pub max_deliver: Option<i64>,                 // None = unlimited
+    pub ack_wait: Duration,                       // visibility-timeout analog
+    pub session_lock_duration: Duration,
+    pub enable_dead_letter: bool,
+    pub dead_letter_subject_prefix: Option<String>,
+    pub credentials_path: Option<String>,         // path to .creds file
+}
+```
+
 ## Provider Selection Guidance
 
 ### Use Azure Service Bus When
@@ -204,6 +282,22 @@ pub struct InMemoryConfig {
 3. **AWS Ecosystem**: Existing AWS infrastructure and IAM integration
 4. **Simple Ordering**: FIFO requirements with multiple processing groups
 5. **Global Scale**: Multi-region deployment with consistent behavior
+
+### Use RabbitMQ When
+
+1. **On-Premises / Self-Hosted**: Full control over broker without cloud lock-in
+2. **AMQP Ecosystem**: Existing AMQP infrastructure or AMQP-native clients
+3. **Large Messages**: Messages exceeding SQS/Service Bus size limits (up to 128 MB)
+4. **Complex Routing**: Need topic exchanges, fanout, or DLX routing topologies
+5. **Mixed Workloads**: Integrating with non-Rust AMQP consumers on the same broker
+
+### Use NATS JetStream When
+
+1. **High Throughput / Low Latency**: Sub-millisecond delivery for real-time workloads
+2. **Edge / IoT Deployments**: Lightweight broker suitable for constrained environments
+3. **Multi-Cloud / Hybrid**: NATS clusters span cloud and on-premises seamlessly
+4. **Dead-Letter Reason Propagation**: Only NATS forwards the reason string to the DLQ
+5. **Modern Messaging Patterns**: Streams, key-value, and object store in one system
 
 ### Use In-Memory When
 

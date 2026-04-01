@@ -178,6 +178,41 @@ mod header_tests {
         assert_eq!(*props.delivery_mode(), Some(2u8));
     }
 
+    /// Verify that ALL x-prefixed headers are excluded from user attributes.
+    #[test]
+    fn test_x_prefix_headers_excluded() {
+        let mut headers = FieldTable::default();
+        // Various x-prefixed extension/broker headers
+        for key in &[
+            "x-session-id",
+            "x-delivery-count",
+            "x-death",
+            "x-custom-provider-header",
+        ] {
+            headers.insert(
+                lapin::types::ShortString::from(*key),
+                lapin::types::AMQPValue::LongString(lapin::types::LongString::from(
+                    b"ignored".as_ref(),
+                )),
+            );
+        }
+        // A regular user attribute
+        headers.insert(
+            lapin::types::ShortString::from("my-attr"),
+            lapin::types::AMQPValue::LongString(lapin::types::LongString::from(
+                b"visible".as_ref(),
+            )),
+        );
+
+        let attrs = RabbitMqProvider::extract_attributes(&Some(headers));
+
+        assert!(!attrs.contains_key("x-session-id"));
+        assert!(!attrs.contains_key("x-delivery-count"));
+        assert!(!attrs.contains_key("x-death"));
+        assert!(!attrs.contains_key("x-custom-provider-header"));
+        assert_eq!(attrs.get("my-attr").map(String::as_str), Some("visible"));
+    }
+
     /// Verify that internal x-* attributes are not returned as user attributes.
     #[test]
     fn test_internal_headers_not_in_attributes() {
@@ -294,5 +329,30 @@ mod error_tests {
         let err = RabbitMqError::new("test error");
         let display = format!("{}", err);
         assert!(display.contains("test error"));
+    }
+}
+
+// ============================================================================
+// Session lock tests
+// ============================================================================
+
+mod session_lock_tests {
+    use super::*;
+
+    /// Verify that session_lock_duration is used for the default lock duration.
+    #[test]
+    fn test_session_lock_duration_default() {
+        let config = RabbitMqConfig::default();
+        assert_eq!(config.session_lock_duration, Duration::minutes(5));
+    }
+
+    /// Verify that a custom session lock duration is respected.
+    #[test]
+    fn test_session_lock_duration_custom() {
+        let config = RabbitMqConfig {
+            session_lock_duration: Duration::minutes(30),
+            ..RabbitMqConfig::default()
+        };
+        assert_eq!(config.session_lock_duration, Duration::minutes(30));
     }
 }
