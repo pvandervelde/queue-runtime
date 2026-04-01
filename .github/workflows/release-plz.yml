@@ -1,17 +1,21 @@
 name: Release-plz Release
 
 on:
-    push:
+    pull_request:
+        types: [closed]
         branches:
             - master
 
+# Prevent duplicate release runs if the event fires more than once.
 concurrency:
-    group: release-plz-release-${{ github.ref }}
+    group: release-plz-release-${{ github.event.pull_request.number }}
     cancel-in-progress: false
 
 jobs:
     release-plz-release:
         name: Release-plz release
+        # Only run when the release PR (labelled "release" by release-plz) is merged.
+        if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release')
         runs-on: ubuntu-latest
         permissions:
             contents: write
