@@ -75,7 +75,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 
 #[cfg(test)]
 #[path = "nats_tests.rs"]
@@ -597,7 +597,12 @@ impl QueueProvider for NatsProvider {
             });
         }
 
-        // JetStream has no multi-message publish API; messages are sent sequentially.
+        // JetStream has no multi-message publish; messages are sent sequentially.
+        // This satisfies the batch API contract (multiple IDs returned in one call)
+        // but does not reduce the number of network round-trips compared with
+        // individual send_message calls.  The NATS protocol does not expose a
+        // PublishBatch primitive, so sequential sending is the best achievable
+        // implementation.  See docs/spec/assertions.md Assertion 20 for context.
         let mut ids = Vec::with_capacity(messages.len());
         for message in messages {
             ids.push(self.send_message(queue, message).await?);
@@ -705,18 +710,27 @@ impl QueueProvider for NatsProvider {
     #[instrument(skip(self, receipt))]
     async fn complete_message(&self, receipt: &ReceiptHandle) -> Result<(), QueueError> {
         let mut in_flight = self.in_flight.lock().await;
-        let entry =
-            in_flight
-                .remove(receipt.handle())
-                .ok_or_else(|| QueueError::MessageNotFound {
-                    receipt: receipt.handle().to_string(),
-                })?;
 
-        if Timestamp::now() > entry.lock_expires_at {
-            return Err(QueueError::MessageNotFound {
-                receipt: receipt.handle().to_string(),
-            });
+        // Check existence and expiry before removal so callers receive a
+        // meaningful error and the JetStream message is not abandoned silently.
+        match in_flight.get(receipt.handle()) {
+            None => {
+                return Err(QueueError::MessageNotFound {
+                    receipt: receipt.handle().to_string(),
+                });
+            }
+            Some(entry) if Timestamp::now() > entry.lock_expires_at => {
+                in_flight.remove(receipt.handle());
+                return Err(QueueError::MessageNotFound {
+                    receipt: format!("{}(expired)", receipt.handle()),
+                });
+            }
+            Some(_) => {}
         }
+
+        let entry = in_flight
+            .remove(receipt.handle())
+            .expect("entry present after pre-check");
 
         entry
             .js_message
@@ -734,18 +748,25 @@ impl QueueProvider for NatsProvider {
     #[instrument(skip(self, receipt))]
     async fn abandon_message(&self, receipt: &ReceiptHandle) -> Result<(), QueueError> {
         let mut in_flight = self.in_flight.lock().await;
-        let entry =
-            in_flight
-                .remove(receipt.handle())
-                .ok_or_else(|| QueueError::MessageNotFound {
-                    receipt: receipt.handle().to_string(),
-                })?;
 
-        if Timestamp::now() > entry.lock_expires_at {
-            return Err(QueueError::MessageNotFound {
-                receipt: receipt.handle().to_string(),
-            });
+        match in_flight.get(receipt.handle()) {
+            None => {
+                return Err(QueueError::MessageNotFound {
+                    receipt: receipt.handle().to_string(),
+                });
+            }
+            Some(entry) if Timestamp::now() > entry.lock_expires_at => {
+                in_flight.remove(receipt.handle());
+                return Err(QueueError::MessageNotFound {
+                    receipt: format!("{}(expired)", receipt.handle()),
+                });
+            }
+            Some(_) => {}
         }
+
+        let entry = in_flight
+            .remove(receipt.handle())
+            .expect("entry present after pre-check");
 
         entry
             .js_message
@@ -767,20 +788,29 @@ impl QueueProvider for NatsProvider {
         reason: &str,
     ) -> Result<(), QueueError> {
         let mut in_flight = self.in_flight.lock().await;
-        let entry =
-            in_flight
-                .remove(receipt.handle())
-                .ok_or_else(|| QueueError::MessageNotFound {
-                    receipt: receipt.handle().to_string(),
-                })?;
 
-        if Timestamp::now() > entry.lock_expires_at {
-            return Err(QueueError::MessageNotFound {
-                receipt: receipt.handle().to_string(),
-            });
+        match in_flight.get(receipt.handle()) {
+            None => {
+                return Err(QueueError::MessageNotFound {
+                    receipt: receipt.handle().to_string(),
+                });
+            }
+            Some(entry) if Timestamp::now() > entry.lock_expires_at => {
+                in_flight.remove(receipt.handle());
+                return Err(QueueError::MessageNotFound {
+                    receipt: format!("{}(expired)", receipt.handle()),
+                });
+            }
+            Some(_) => {}
         }
 
+        let entry = in_flight
+            .remove(receipt.handle())
+            .expect("entry present after pre-check");
+
         // Terminate delivery so JetStream stops redelivering this message.
+        // This must happen before the DLQ publish so that even if DLQ write
+        // fails the message is not stuck in re-delivery.
         entry
             .js_message
             .ack_with(async_nats::jetstream::AckKind::Term)
@@ -791,7 +821,11 @@ impl QueueProvider for NatsProvider {
                 message: format!("JetStream term ack failed: {}", e),
             })?;
 
-        // Publish to DLQ stream if configured.
+        // Publish to DLQ stream if configured.  The Term above is the
+        // authoritative action; DLQ publishing is best-effort.  If the
+        // publish fails the message has still been terminated from JetStream
+        // (it will not be redelivered), so we log the error and return Ok
+        // rather than signalling failure to the caller.
         if let Some(ref dlq_subject) = entry.dead_letter_subject {
             let mut headers = async_nats::header::HeaderMap::new();
             headers.insert("x-dead-letter-reason", reason);
@@ -806,22 +840,25 @@ impl QueueProvider for NatsProvider {
                 }
             }
 
-            self.client
+            if let Err(e) = self
+                .client
                 .publish_with_headers(dlq_subject.clone(), headers, payload)
                 .await
-                .map_err(|e| QueueError::ProviderError {
-                    provider: "nats".to_string(),
-                    code: "DLQ_PUBLISH_FAILED".to_string(),
-                    message: format!(
-                        "failed to publish dead-lettered message to '{}': {}",
-                        dlq_subject, e
-                    ),
-                })?;
-
-            debug!(
-                reason,
-                dlq_subject, "Message dead-lettered and published to DLQ"
-            );
+            {
+                // Log the failure but do not surface it — the message has
+                // already been terminated from JetStream.
+                warn!(
+                    reason,
+                    dlq_subject,
+                    error = %e,
+                    "Failed to publish dead-lettered message to DLQ (message already terminated)"
+                );
+            } else {
+                debug!(
+                    reason,
+                    dlq_subject, "Message dead-lettered and published to DLQ"
+                );
+            }
         } else {
             debug!(reason, "Message terminated (no DLQ configured)");
         }
@@ -964,18 +1001,26 @@ impl SessionProvider for NatsSessionProvider {
         self.check_lock()?;
 
         let mut in_flight = self.in_flight.lock().await;
-        let entry =
-            in_flight
-                .remove(receipt.handle())
-                .ok_or_else(|| QueueError::MessageNotFound {
-                    receipt: receipt.handle().to_string(),
-                })?;
 
-        if Timestamp::now() > entry.lock_expires_at {
-            return Err(QueueError::MessageNotFound {
-                receipt: receipt.handle().to_string(),
-            });
+        // Check existence and expiry before removal.
+        match in_flight.get(receipt.handle()) {
+            None => {
+                return Err(QueueError::MessageNotFound {
+                    receipt: receipt.handle().to_string(),
+                });
+            }
+            Some(entry) if Timestamp::now() > entry.lock_expires_at => {
+                in_flight.remove(receipt.handle());
+                return Err(QueueError::MessageNotFound {
+                    receipt: format!("{}(expired)", receipt.handle()),
+                });
+            }
+            Some(_) => {}
         }
+
+        let entry = in_flight
+            .remove(receipt.handle())
+            .expect("entry present after pre-check");
 
         entry
             .js_message
@@ -987,22 +1032,27 @@ impl SessionProvider for NatsSessionProvider {
                 message: format!("session term ack failed: {}", e),
             })?;
 
-        // Forward to DLQ if configured
+        // Forward to DLQ if configured.  Best-effort: Term above is canonical;
+        // if the DLQ publish fails we log and do not propagate the error.
         if let Some(ref dlq_subject) = entry.dead_letter_subject {
             let mut headers = async_nats::header::HeaderMap::new();
             headers.insert("x-dead-letter-reason", reason);
             let payload = entry.js_message.message.payload.clone();
 
-            self.client
+            if let Err(e) = self
+                .client
                 .publish_with_headers(dlq_subject.clone(), headers, payload)
                 .await
-                .map_err(|e| QueueError::ProviderError {
-                    provider: "nats".to_string(),
-                    code: "DLQ_PUBLISH_FAILED".to_string(),
-                    message: format!("failed to publish to DLQ '{}': {}", dlq_subject, e),
-                })?;
-
-            debug!(reason, dlq_subject, "Session message dead-lettered");
+            {
+                warn!(
+                    reason,
+                    dlq_subject,
+                    error = %e,
+                    "Session: failed to publish dead-lettered message to DLQ (message already terminated)"
+                );
+            } else {
+                debug!(reason, dlq_subject, "Session message dead-lettered");
+            }
         }
 
         Ok(())
@@ -1075,18 +1125,26 @@ impl NatsSessionProvider {
         kind: SettlementKind,
     ) -> Result<(), QueueError> {
         let mut in_flight = self.in_flight.lock().await;
-        let entry =
-            in_flight
-                .remove(receipt.handle())
-                .ok_or_else(|| QueueError::MessageNotFound {
-                    receipt: receipt.handle().to_string(),
-                })?;
 
-        if Timestamp::now() > entry.lock_expires_at {
-            return Err(QueueError::MessageNotFound {
-                receipt: receipt.handle().to_string(),
-            });
+        // Check existence and expiry before removal (same pattern as NatsProvider).
+        match in_flight.get(receipt.handle()) {
+            None => {
+                return Err(QueueError::MessageNotFound {
+                    receipt: receipt.handle().to_string(),
+                });
+            }
+            Some(entry) if Timestamp::now() > entry.lock_expires_at => {
+                in_flight.remove(receipt.handle());
+                return Err(QueueError::MessageNotFound {
+                    receipt: format!("{}(expired)", receipt.handle()),
+                });
+            }
+            Some(_) => {}
         }
+
+        let entry = in_flight
+            .remove(receipt.handle())
+            .expect("entry present after pre-check");
 
         match kind {
             SettlementKind::Ack => {

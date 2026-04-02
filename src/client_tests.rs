@@ -231,7 +231,11 @@ async fn test_queue_client_provider_type<C: QueueClient>(client: &C) {
     assert!(
         matches!(
             provider_type,
-            ProviderType::InMemory | ProviderType::AzureServiceBus | ProviderType::AwsSqs
+            ProviderType::InMemory
+                | ProviderType::AzureServiceBus
+                | ProviderType::AwsSqs
+                | ProviderType::RabbitMq
+                | ProviderType::Nats
         ),
         "Should return valid provider type"
     );
@@ -417,6 +421,48 @@ async fn test_factory_create_from_aws_config() {
 
     // Note: May fail if AWS SDK not available, but should not panic
     let _ = result;
+}
+
+#[tokio::test]
+async fn test_factory_create_from_rabbitmq_config_errors_without_broker() {
+    // Arrange – point at a port that is not running
+    let config = QueueConfig {
+        provider: ProviderConfig::RabbitMq(crate::providers::rabbitmq::RabbitMqConfig {
+            url: "amqp://guest:guest@127.0.0.1:15799".to_string(),
+            ..crate::providers::rabbitmq::RabbitMqConfig::default()
+        }),
+        ..Default::default()
+    };
+
+    // Act
+    let result = QueueClientFactory::create_client(config).await;
+
+    // Assert – must fail (no broker) but must NOT panic
+    assert!(
+        result.is_err(),
+        "Should fail with connection error when no broker is available"
+    );
+}
+
+#[tokio::test]
+async fn test_factory_create_from_nats_config_errors_without_server() {
+    // Arrange – point at a port that is not running
+    let config = QueueConfig {
+        provider: ProviderConfig::Nats(crate::providers::nats::NatsConfig {
+            url: "nats://127.0.0.1:15800".to_string(),
+            ..crate::providers::nats::NatsConfig::default()
+        }),
+        ..Default::default()
+    };
+
+    // Act
+    let result = QueueClientFactory::create_client(config).await;
+
+    // Assert – must fail (no server) but must NOT panic
+    assert!(
+        result.is_err(),
+        "Should fail with connection error when no NATS server is available"
+    );
 }
 
 // ============================================================================

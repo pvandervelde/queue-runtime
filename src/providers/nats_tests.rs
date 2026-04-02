@@ -439,3 +439,66 @@ mod additional_tests {
         assert_eq!(config.session_lock_duration, Duration::minutes(20));
     }
 }
+
+// ============================================================================
+// URL redaction tests
+// ============================================================================
+
+mod url_redaction_tests {
+    use super::*;
+
+    /// Verify that credentials embedded in a NATS URL are replaced with `***`.
+    #[test]
+    fn test_redact_url_with_credentials() {
+        let redacted = redact_url("nats://user:pass@localhost:4222");
+        assert!(
+            !redacted.contains("user"),
+            "Username must be redacted: {redacted}"
+        );
+        assert!(
+            !redacted.contains("pass"),
+            "Password must be redacted: {redacted}"
+        );
+        assert!(
+            redacted.contains("localhost"),
+            "Host must be preserved: {redacted}"
+        );
+        assert!(
+            redacted.contains("4222"),
+            "Port must be preserved: {redacted}"
+        );
+        assert!(
+            redacted.contains("***"),
+            "Redaction marker must appear: {redacted}"
+        );
+    }
+
+    /// Verify that a URL without credentials is returned unchanged.
+    #[test]
+    fn test_redact_url_without_credentials() {
+        let url = "nats://localhost:4222";
+        let redacted = redact_url(url);
+        assert_eq!(redacted.trim_end_matches('/'), url.trim_end_matches('/'));
+    }
+
+    /// Verify that an invalid URL returns the sentinel string.
+    #[test]
+    fn test_redact_url_invalid_url() {
+        let redacted = redact_url("not a url !!!");
+        assert_eq!(redacted, "<invalid-url>");
+    }
+
+    /// Verify that only the username is present in the URL (no password).
+    #[test]
+    fn test_redact_url_username_only() {
+        let redacted = redact_url("nats://mytoken@nats.example.com:4222");
+        assert!(
+            !redacted.contains("mytoken"),
+            "Token must be redacted: {redacted}"
+        );
+        assert!(
+            redacted.contains("nats.example.com"),
+            "Host must be preserved: {redacted}"
+        );
+    }
+}

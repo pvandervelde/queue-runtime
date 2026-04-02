@@ -356,3 +356,64 @@ mod session_lock_tests {
         assert_eq!(config.session_lock_duration, Duration::minutes(30));
     }
 }
+
+// ============================================================================
+// URL redaction tests
+// ============================================================================
+
+mod url_redaction_tests {
+    use super::*;
+
+    /// Verify that credentials embedded in an AMQP URL are replaced with `***`.
+    #[test]
+    fn test_redact_url_with_credentials() {
+        let redacted = redact_url("amqp://user:pass@localhost:5672");
+        assert!(
+            !redacted.contains("user"),
+            "Username must be redacted: {redacted}"
+        );
+        assert!(
+            !redacted.contains("pass"),
+            "Password must be redacted: {redacted}"
+        );
+        assert!(
+            redacted.contains("localhost"),
+            "Host must be preserved: {redacted}"
+        );
+        assert!(
+            redacted.contains("5672"),
+            "Port must be preserved: {redacted}"
+        );
+        assert!(
+            redacted.contains("***"),
+            "Redaction marker must appear: {redacted}"
+        );
+    }
+
+    /// Verify that a URL without credentials is returned unchanged.
+    #[test]
+    fn test_redact_url_without_credentials() {
+        let url = "amqp://localhost:5672";
+        let redacted = redact_url(url);
+        assert_eq!(redacted.trim_end_matches('/'), url.trim_end_matches('/'));
+    }
+
+    /// Verify that an invalid URL returns the sentinel string.
+    #[test]
+    fn test_redact_url_invalid_url() {
+        let redacted = redact_url("not a url !!!");
+        assert_eq!(redacted, "<invalid-url>");
+    }
+
+    /// Verify that the default config URL has its credentials redacted.
+    #[test]
+    fn test_redact_url_default_config_url() {
+        let config = RabbitMqConfig::default();
+        let redacted = redact_url(&config.url);
+        // Default URL contains "guest:guest" – these must not appear after redaction.
+        assert!(
+            !redacted.contains("guest"),
+            "Default credentials must be redacted: {redacted}"
+        );
+    }
+}

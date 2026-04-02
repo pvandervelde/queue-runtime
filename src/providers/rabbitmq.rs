@@ -229,11 +229,23 @@ fn session_queue_name(queue: &QueueName, session_id: &SessionId) -> String {
 /// unacked state on the AMQP broker.  If the application crashes before calling
 /// [`complete_message`] or [`abandon_message`], the AMQP broker will redeliver
 /// the message once the connection is dropped.
+///
+/// # Channel Strategy
+///
+/// A single persistent AMQP channel is reused for all publish operations and a
+/// second for all receive operations instead of opening a new channel per call.
+/// Both channels are recreated transparently if the broker closes them.  This
+/// keeps the channel count bounded regardless of message throughput and avoids
+/// exhausting the broker's per-connection channel limit.
 pub struct RabbitMqProvider {
     connection: Arc<Connection>,
     config: RabbitMqConfig,
     /// In-flight messages indexed by their receipt handle UUID.
     in_flight: Arc<Mutex<HashMap<String, InFlightEntry>>>,
+    /// Shared channel used for all publish operations.
+    publish_channel: Arc<Mutex<Option<Channel>>>,
+    /// Shared channel used for all receive operations.
+    receive_channel: Arc<Mutex<Option<Channel>>>,
 }
 
 impl RabbitMqProvider {
@@ -272,6 +284,8 @@ impl RabbitMqProvider {
             connection: Arc::new(conn),
             config,
             in_flight: Arc::new(Mutex::new(HashMap::new())),
+            publish_channel: Arc::new(Mutex::new(None)),
+            receive_channel: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -297,6 +311,35 @@ impl RabbitMqProvider {
         }
 
         Ok(channel)
+    }
+
+    /// Return the shared publish channel, creating or recreating it if needed.
+    ///
+    /// If the stored channel has been closed by the broker (e.g. after a
+    /// channel error), a new channel is transparently opened and stored.
+    async fn get_publish_channel(&self) -> Result<Channel, QueueError> {
+        let mut guard = self.publish_channel.lock().await;
+        if let Some(ref ch) = *guard {
+            if ch.status().connected() {
+                return Ok(ch.clone());
+            }
+        }
+        let ch = self.open_channel().await?;
+        *guard = Some(ch.clone());
+        Ok(ch)
+    }
+
+    /// Return the shared receive channel, creating or recreating it if needed.
+    async fn get_receive_channel(&self) -> Result<Channel, QueueError> {
+        let mut guard = self.receive_channel.lock().await;
+        if let Some(ref ch) = *guard {
+            if ch.status().connected() {
+                return Ok(ch.clone());
+            }
+        }
+        let ch = self.open_channel().await?;
+        *guard = Some(ch.clone());
+        Ok(ch)
     }
 
     /// Declare a durable queue on the broker, optionally wiring up dead letter
@@ -578,7 +621,7 @@ impl QueueProvider for RabbitMqProvider {
             return Err(QueueError::MessageTooLarge { size, max_size });
         }
 
-        let channel = self.open_channel().await?;
+        let channel = self.get_publish_channel().await?;
 
         // Route session messages to their dedicated sub-queue; all others go to
         // the main queue via the default exchange.
@@ -631,6 +674,11 @@ impl QueueProvider for RabbitMqProvider {
         }
 
         // AMQP 0-9-1 has no native batch-publish command; messages are sent sequentially.
+        // This satisfies the batch API contract (multiple IDs returned in one call)
+        // but does not reduce the number of network round-trips compared with
+        // individual send_message calls.  The AMQP protocol does not expose a
+        // PublishBatch primitive, so sequential sending is the best achievable
+        // implementation.  See docs/spec/assertions.md Assertion 20 for context.
         let mut ids = Vec::with_capacity(messages.len());
         for message in messages {
             ids.push(self.send_message(queue, message).await?);
@@ -644,7 +692,7 @@ impl QueueProvider for RabbitMqProvider {
         queue: &QueueName,
         timeout: Duration,
     ) -> Result<Option<ReceivedMessage>, QueueError> {
-        let channel = self.open_channel().await?;
+        let channel = self.get_receive_channel().await?;
         self.declare_queue(&channel, queue).await?;
 
         let start = std::time::Instant::now();
@@ -697,7 +745,7 @@ impl QueueProvider for RabbitMqProvider {
         max_messages: u32,
         timeout: Duration,
     ) -> Result<Vec<ReceivedMessage>, QueueError> {
-        let channel = self.open_channel().await?;
+        let channel = self.get_receive_channel().await?;
         self.declare_queue(&channel, queue).await?;
 
         let mut messages = Vec::new();

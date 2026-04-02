@@ -37,13 +37,21 @@ impl ProviderType {
     }
 
     /// Get maximum message size for provider
+    ///
+    /// # Notes
+    ///
+    /// The NATS limit (1 MB) reflects the JetStream server default
+    /// (`max_payload` setting).  Operators who raise `max_payload` on the
+    /// server can publish larger messages; the client-side check here will
+    /// then be the binding limit until a matching configuration option is
+    /// added.  See the [`NatsConfig`] documentation for guidance.
     pub fn max_message_size(&self) -> usize {
         match self {
             Self::AzureServiceBus => 1024 * 1024, // 1MB
             Self::AwsSqs => 256 * 1024,           // 256KB
             Self::InMemory => 10 * 1024 * 1024,   // 10MB
             Self::RabbitMq => 128 * 1024 * 1024,  // 128MB (configurable, practical limit)
-            Self::Nats => 1024 * 1024,            // 1MB (default JetStream max)
+            Self::Nats => 1024 * 1024,            // 1MB (NATS server default; see note above)
         }
     }
 }
