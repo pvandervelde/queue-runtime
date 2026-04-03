@@ -178,11 +178,13 @@ mod header_tests {
         assert_eq!(*props.delivery_mode(), Some(2u8));
     }
 
-    /// Verify that ALL x-prefixed headers are excluded from user attributes.
+    /// Verify that raw broker/extension x- headers are NOT returned as user
+    /// attributes, and that the x-attr- prefix scheme lets user attributes
+    /// with any key (including x-prefixed ones) round-trip correctly.
     #[test]
     fn test_x_prefix_headers_excluded() {
         let mut headers = FieldTable::default();
-        // Various x-prefixed extension/broker headers
+        // Raw broker/extension headers must NOT appear as user attributes.
         for key in &[
             "x-session-id",
             "x-delivery-count",
@@ -196,20 +198,31 @@ mod header_tests {
                 )),
             );
         }
-        // A regular user attribute
+        // A user attribute encoded correctly via the x-attr- prefix.
         headers.insert(
-            lapin::types::ShortString::from("my-attr"),
+            lapin::types::ShortString::from("x-attr-my-attr"),
             lapin::types::AMQPValue::LongString(lapin::types::LongString::from(
                 b"visible".as_ref(),
+            )),
+        );
+        // A plain key without the x-attr- prefix must NOT be returned.
+        headers.insert(
+            lapin::types::ShortString::from("plain-attr"),
+            lapin::types::AMQPValue::LongString(lapin::types::LongString::from(
+                b"invisible".as_ref(),
             )),
         );
 
         let attrs = RabbitMqProvider::extract_attributes(&Some(headers));
 
+        // Broker/extension headers are not returned.
         assert!(!attrs.contains_key("x-session-id"));
         assert!(!attrs.contains_key("x-delivery-count"));
         assert!(!attrs.contains_key("x-death"));
         assert!(!attrs.contains_key("x-custom-provider-header"));
+        // Plain key without the prefix is not returned.
+        assert!(!attrs.contains_key("plain-attr"));
+        // User attribute stored with x-attr- prefix is returned with prefix stripped.
         assert_eq!(attrs.get("my-attr").map(String::as_str), Some("visible"));
     }
 
@@ -231,6 +244,37 @@ mod header_tests {
         assert!(!attrs.contains_key("x-delivery-count"));
         // User attribute must be present
         assert_eq!(attrs.get("my-key").map(String::as_str), Some("my-value"));
+    }
+
+    /// Verify that a user attribute whose key starts with "x-" roundtrips correctly.
+    ///
+    /// This is the regression test for the bug where build_properties stored raw
+    /// keys and extract_attributes silently dropped all x-* headers, meaning that
+    /// an attribute like "x-custom-meta" was always lost.
+    #[test]
+    fn test_x_prefixed_user_attribute_roundtrip() {
+        let mut message = Message::new(bytes::Bytes::from("body"));
+        message = message.with_attribute("x-custom-meta".to_string(), "hello".to_string());
+        message = message.with_attribute("plain-key".to_string(), "world".to_string());
+
+        let props = RabbitMqProvider::build_properties(&message);
+        let headers = props.headers().clone();
+        let attrs = RabbitMqProvider::extract_attributes(&headers);
+
+        // x-prefixed user attribute must survive the roundtrip.
+        assert_eq!(
+            attrs.get("x-custom-meta").map(String::as_str),
+            Some("hello"),
+            "x-prefixed user attribute must roundtrip"
+        );
+        // Regular user attribute must survive too.
+        assert_eq!(
+            attrs.get("plain-key").map(String::as_str),
+            Some("world"),
+            "plain user attribute must roundtrip"
+        );
+        // Provider-managed headers must not bleed into user attributes.
+        assert!(!attrs.contains_key("x-session-id"));
     }
 
     /// Verify that delivery count is extracted from x-delivery-count header.
@@ -263,21 +307,24 @@ mod header_tests {
         assert!(props.correlation_id().is_none());
     }
 
-    /// Verify that attributes with non-LongString values are ignored on extraction.
+    /// Verify that attributes with values of non-LongString AMQP type are ignored.
     #[test]
     fn test_extract_attributes_ignores_non_string() {
         let mut headers = FieldTable::default();
+        // Non-LongString value under the x-attr- prefix must be ignored.
         headers.insert(
-            lapin::types::ShortString::from("int-field"),
+            lapin::types::ShortString::from("x-attr-int-field"),
             lapin::types::AMQPValue::LongLongInt(42),
         );
+        // LongString value under the x-attr- prefix must be returned.
         headers.insert(
-            lapin::types::ShortString::from("str-field"),
+            lapin::types::ShortString::from("x-attr-str-field"),
             lapin::types::AMQPValue::LongString(lapin::types::LongString::from(b"hello".as_ref())),
         );
         let attrs = RabbitMqProvider::extract_attributes(&Some(headers));
-        // Non-string field should be skipped
+        // Non-LongString field must be skipped.
         assert!(!attrs.contains_key("int-field"));
+        // LongString field must be present with the prefix stripped.
         assert_eq!(attrs.get("str-field").map(String::as_str), Some("hello"));
     }
 
@@ -414,6 +461,93 @@ mod url_redaction_tests {
         assert!(
             !redacted.contains("guest"),
             "Default credentials must be redacted: {redacted}"
+        );
+    }
+}
+
+// ============================================================================
+// Session lock helper tests (require no live RabbitMQ broker)
+// ============================================================================
+
+mod session_lock_tests_helpers {
+    use super::*;
+    use std::sync::Mutex;
+
+    fn lock_expiring_in(minutes: i64) -> Mutex<Timestamp> {
+        let ts =
+            Timestamp::from_datetime(Timestamp::now().as_datetime() + Duration::minutes(minutes));
+        Mutex::new(ts)
+    }
+
+    fn lock_expired_since(minutes: i64) -> Mutex<Timestamp> {
+        let ts =
+            Timestamp::from_datetime(Timestamp::now().as_datetime() - Duration::minutes(minutes));
+        Mutex::new(ts)
+    }
+
+    /// A valid (non-expired) lock returns Ok.
+    #[test]
+    fn test_check_session_lock_valid() {
+        let lock = lock_expiring_in(5);
+        let session = SessionId::new("test-session".to_string()).unwrap();
+        assert!(check_session_lock(&lock, &session).is_ok());
+    }
+
+    /// An expired lock returns SessionLocked with the correct session ID.
+    #[test]
+    fn test_check_session_lock_expired() {
+        let lock = lock_expired_since(1);
+        let session = SessionId::new("expired-session".to_string()).unwrap();
+
+        let result = check_session_lock(&lock, &session);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            QueueError::SessionLocked { session_id, .. } => {
+                assert_eq!(session_id, "expired-session");
+            }
+            other => panic!("expected SessionLocked, got: {:?}", other),
+        }
+    }
+
+    /// Renewing an expired lock makes it valid again.
+    #[test]
+    fn test_advance_session_lock_from_expired() {
+        let lock = lock_expired_since(1); // already expired
+        let session = SessionId::new("test-session".to_string()).unwrap();
+
+        // Confirm it's expired before renewal.
+        assert!(check_session_lock(&lock, &session).is_err());
+
+        // Renew for 5 minutes.
+        let new_expiry = advance_session_lock(&lock, Duration::minutes(5))
+            .expect("advance_session_lock should succeed");
+
+        // New expiry is in the future.
+        assert!(
+            new_expiry.as_datetime() > Timestamp::now().as_datetime(),
+            "new expiry must be in the future"
+        );
+
+        // Lock is now valid.
+        assert!(check_session_lock(&lock, &session).is_ok());
+    }
+
+    /// Renewing an already-valid lock extends it further into the future.
+    #[test]
+    fn test_advance_session_lock_extends_valid_lock() {
+        let lock = lock_expiring_in(1); // valid but close to expiry
+
+        let before = { *lock.lock().unwrap() };
+
+        advance_session_lock(&lock, Duration::minutes(5))
+            .expect("advance_session_lock should succeed");
+
+        let after = { *lock.lock().unwrap() };
+
+        assert!(
+            after.as_datetime() > before.as_datetime(),
+            "renewal must extend the expiry"
         );
     }
 }

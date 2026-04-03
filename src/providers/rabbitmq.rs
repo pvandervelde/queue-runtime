@@ -428,10 +428,15 @@ impl RabbitMqProvider {
         }
 
         // Encode message attributes and session ID into AMQP headers.
+        // User attributes are prefixed with "x-attr-" so they survive the
+        // extract_attributes filter that drops broker/extension x- headers.
+        // This mirrors the NATS provider's "x-attr-" scheme and ensures that
+        // attribute names starting with "x-" roundtrip correctly.
         let mut headers = FieldTable::default();
         for (k, v) in &message.attributes {
+            let header_key = format!("x-attr-{}", k);
             headers.insert(
-                ShortString::from(k.as_str()),
+                ShortString::from(header_key.as_str()),
                 AMQPValue::LongString(LongString::from(v.as_bytes())),
             );
         }
@@ -445,25 +450,26 @@ impl RabbitMqProvider {
         props.with_headers(headers)
     }
 
-    /// Extract message attributes from AMQP headers, skipping all `x-`-prefixed headers.
+    /// Extract message attributes from AMQP headers.
     ///
-    /// AMQP convention reserves the `x-` prefix for extension / broker-managed headers
-    /// (e.g. `x-session-id`, `x-delivery-count`, `x-death`).  User attributes are stored
-    /// without the `x-` prefix, so this filter is safe to apply broadly.
+    /// Only headers with the `x-attr-` prefix are considered user attributes;
+    /// the prefix is stripped before returning. This scheme lets attribute keys
+    /// that themselves start with `x-` (e.g. `x-custom-meta`) round-trip
+    /// correctly while keeping AMQP broker/extension headers (`x-session-id`,
+    /// `x-delivery-count`, `x-death`, …) out of the attribute map.
     fn extract_attributes(headers: &Option<FieldTable>) -> HashMap<String, String> {
         let mut attrs = HashMap::new();
         if let Some(ht) = headers {
             for (k, v) in ht.inner() {
                 let key = k.as_str();
-                // Skip AMQP extension headers (provider-managed and broker-managed).
-                if key.starts_with("x-") {
-                    continue;
-                }
-                if let AMQPValue::LongString(s) = v {
-                    attrs.insert(
-                        key.to_string(),
-                        String::from_utf8_lossy(s.as_bytes()).to_string(),
-                    );
+                // Only extract user-attribute headers (written with "x-attr-" prefix).
+                if let Some(attr_key) = key.strip_prefix("x-attr-") {
+                    if let AMQPValue::LongString(s) = v {
+                        attrs.insert(
+                            attr_key.to_string(),
+                            String::from_utf8_lossy(s.as_bytes()).to_string(),
+                        );
+                    }
                 }
             }
         }
@@ -987,17 +993,7 @@ impl SessionProvider for RabbitMqSessionProvider {
     }
 
     async fn renew_session_lock(&self) -> Result<(), QueueError> {
-        let new_expiry = Timestamp::from_datetime(
-            Timestamp::now().as_datetime() + self.config.session_lock_duration,
-        );
-        *self
-            .lock_expires_at
-            .lock()
-            .map_err(|_| QueueError::ProviderError {
-                provider: "rabbitmq".to_string(),
-                code: "INTERNAL_ERROR".to_string(),
-                message: "session lock mutex poisoned".to_string(),
-            })? = new_expiry;
+        advance_session_lock(&self.lock_expires_at, self.config.session_lock_duration)?;
         debug!(session_id = %self.session_id, "RabbitMQ session lock renewed");
         Ok(())
     }
@@ -1022,24 +1018,56 @@ impl SessionProvider for RabbitMqSessionProvider {
     }
 }
 
+// ============================================================================
+// Session lock helpers — module-level so they are testable without a live broker
+// ============================================================================
+
+/// Return an error when the session lock timestamp has expired.
+///
+/// Extracted from [`RabbitMqSessionProvider::check_lock`] so the expiry logic can
+/// be verified in unit tests without constructing a full provider.
+fn check_session_lock(
+    lock_expires_at: &std::sync::Mutex<Timestamp>,
+    session_id: &SessionId,
+) -> Result<(), QueueError> {
+    let expires = *lock_expires_at
+        .lock()
+        .map_err(|_| QueueError::ProviderError {
+            provider: "rabbitmq".to_string(),
+            code: "INTERNAL_ERROR".to_string(),
+            message: "session lock mutex poisoned".to_string(),
+        })?;
+    if Timestamp::now() > expires {
+        return Err(QueueError::SessionLocked {
+            session_id: session_id.as_str().to_string(),
+            locked_until: expires,
+        });
+    }
+    Ok(())
+}
+
+/// Advance the session lock by `duration` from now and return the new expiry.
+///
+/// Extracted from [`RabbitMqSessionProvider::renew_session_lock`] for the same reason.
+fn advance_session_lock(
+    lock_expires_at: &std::sync::Mutex<Timestamp>,
+    duration: Duration,
+) -> Result<Timestamp, QueueError> {
+    let new_expiry = Timestamp::from_datetime(Timestamp::now().as_datetime() + duration);
+    *lock_expires_at
+        .lock()
+        .map_err(|_| QueueError::ProviderError {
+            provider: "rabbitmq".to_string(),
+            code: "INTERNAL_ERROR".to_string(),
+            message: "session lock mutex poisoned".to_string(),
+        })? = new_expiry;
+    Ok(new_expiry)
+}
+
 impl RabbitMqSessionProvider {
     /// Return an error if the session lock has expired.
     fn check_lock(&self) -> Result<(), QueueError> {
-        let expires = *self
-            .lock_expires_at
-            .lock()
-            .map_err(|_| QueueError::ProviderError {
-                provider: "rabbitmq".to_string(),
-                code: "INTERNAL_ERROR".to_string(),
-                message: "session lock mutex poisoned".to_string(),
-            })?;
-        if Timestamp::now() > expires {
-            return Err(QueueError::SessionLocked {
-                session_id: self.session_id.as_str().to_string(),
-                locked_until: expires,
-            });
-        }
-        Ok(())
+        check_session_lock(&self.lock_expires_at, &self.session_id)
     }
 
     /// Register a delivery in the in-flight map and build a [`ReceivedMessage`].

@@ -1059,17 +1059,7 @@ impl SessionProvider for NatsSessionProvider {
     }
 
     async fn renew_session_lock(&self) -> Result<(), QueueError> {
-        let new_expiry = Timestamp::from_datetime(
-            Timestamp::now().as_datetime() + self.config.session_lock_duration,
-        );
-        *self
-            .lock_expires_at
-            .lock()
-            .map_err(|_| QueueError::ProviderError {
-                provider: "nats".to_string(),
-                code: "INTERNAL_ERROR".to_string(),
-                message: "session lock mutex poisoned".to_string(),
-            })? = new_expiry;
+        advance_session_lock(&self.lock_expires_at, self.config.session_lock_duration)?;
         debug!(session_id = %self.session_id, "NATS session lock renewed");
         Ok(())
     }
@@ -1092,6 +1082,52 @@ impl SessionProvider for NatsSessionProvider {
     }
 }
 
+// ============================================================================
+// Session lock helpers — module-level so they are testable without a live server
+// ============================================================================
+
+/// Return an error when the session lock timestamp has expired.
+///
+/// Extracted from [`NatsSessionProvider::check_lock`] so the expiry logic can be
+/// verified in unit tests without constructing a full provider.
+fn check_session_lock(
+    lock_expires_at: &std::sync::Mutex<Timestamp>,
+    session_id: &SessionId,
+) -> Result<(), QueueError> {
+    let expires = *lock_expires_at
+        .lock()
+        .map_err(|_| QueueError::ProviderError {
+            provider: "nats".to_string(),
+            code: "INTERNAL_ERROR".to_string(),
+            message: "session lock mutex poisoned".to_string(),
+        })?;
+    if Timestamp::now() > expires {
+        return Err(QueueError::SessionLocked {
+            session_id: session_id.as_str().to_string(),
+            locked_until: expires,
+        });
+    }
+    Ok(())
+}
+
+/// Advance the session lock by `duration` from now and return the new expiry.
+///
+/// Extracted from [`NatsSessionProvider::renew_session_lock`] for the same reason.
+fn advance_session_lock(
+    lock_expires_at: &std::sync::Mutex<Timestamp>,
+    duration: Duration,
+) -> Result<Timestamp, QueueError> {
+    let new_expiry = Timestamp::from_datetime(Timestamp::now().as_datetime() + duration);
+    *lock_expires_at
+        .lock()
+        .map_err(|_| QueueError::ProviderError {
+            provider: "nats".to_string(),
+            code: "INTERNAL_ERROR".to_string(),
+            message: "session lock mutex poisoned".to_string(),
+        })? = new_expiry;
+    Ok(new_expiry)
+}
+
 /// Internal settlement kind for session operations.
 enum SettlementKind {
     Ack,
@@ -1101,21 +1137,7 @@ enum SettlementKind {
 impl NatsSessionProvider {
     /// Return an error if the session lock has expired.
     fn check_lock(&self) -> Result<(), QueueError> {
-        let expires = *self
-            .lock_expires_at
-            .lock()
-            .map_err(|_| QueueError::ProviderError {
-                provider: "nats".to_string(),
-                code: "INTERNAL_ERROR".to_string(),
-                message: "session lock mutex poisoned".to_string(),
-            })?;
-        if Timestamp::now() > expires {
-            return Err(QueueError::SessionLocked {
-                session_id: self.session_id.as_str().to_string(),
-                locked_until: expires,
-            });
-        }
-        Ok(())
+        check_session_lock(&self.lock_expires_at, &self.session_id)
     }
 
     /// Ack or nak a message identified by its receipt handle.

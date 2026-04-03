@@ -502,3 +502,90 @@ mod url_redaction_tests {
         );
     }
 }
+
+// ============================================================================
+// Session lock helper tests (require no live NATS server)
+// ============================================================================
+
+mod session_lock_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    fn lock_expiring_in(minutes: i64) -> Mutex<Timestamp> {
+        let ts =
+            Timestamp::from_datetime(Timestamp::now().as_datetime() + Duration::minutes(minutes));
+        Mutex::new(ts)
+    }
+
+    fn lock_expired_since(minutes: i64) -> Mutex<Timestamp> {
+        let ts =
+            Timestamp::from_datetime(Timestamp::now().as_datetime() - Duration::minutes(minutes));
+        Mutex::new(ts)
+    }
+
+    /// A valid (non-expired) lock returns Ok.
+    #[test]
+    fn test_check_session_lock_valid() {
+        let lock = lock_expiring_in(5);
+        let session = SessionId::new("test-session".to_string()).unwrap();
+        assert!(check_session_lock(&lock, &session).is_ok());
+    }
+
+    /// An expired lock returns SessionLocked with the correct session ID.
+    #[test]
+    fn test_check_session_lock_expired() {
+        let lock = lock_expired_since(1);
+        let session = SessionId::new("expired-session".to_string()).unwrap();
+
+        let result = check_session_lock(&lock, &session);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            QueueError::SessionLocked { session_id, .. } => {
+                assert_eq!(session_id, "expired-session");
+            }
+            other => panic!("expected SessionLocked, got: {:?}", other),
+        }
+    }
+
+    /// Renewing an expired lock makes it valid again.
+    #[test]
+    fn test_advance_session_lock_from_expired() {
+        let lock = lock_expired_since(1); // already expired
+        let session = SessionId::new("test-session".to_string()).unwrap();
+
+        // Confirm it's expired before renewal.
+        assert!(check_session_lock(&lock, &session).is_err());
+
+        // Renew for 5 minutes.
+        let new_expiry = advance_session_lock(&lock, Duration::minutes(5))
+            .expect("advance_session_lock should succeed");
+
+        // New expiry is in the future.
+        assert!(
+            new_expiry.as_datetime() > Timestamp::now().as_datetime(),
+            "new expiry must be in the future"
+        );
+
+        // Lock is now valid.
+        assert!(check_session_lock(&lock, &session).is_ok());
+    }
+
+    /// Renewing an already-valid lock extends it further into the future.
+    #[test]
+    fn test_advance_session_lock_extends_valid_lock() {
+        let lock = lock_expiring_in(1); // valid but close to expiry
+
+        let before = { *lock.lock().unwrap() };
+
+        advance_session_lock(&lock, Duration::minutes(5))
+            .expect("advance_session_lock should succeed");
+
+        let after = { *lock.lock().unwrap() };
+
+        assert!(
+            after.as_datetime() > before.as_datetime(),
+            "renewal must extend the expiry"
+        );
+    }
+}

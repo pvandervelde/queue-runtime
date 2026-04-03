@@ -274,6 +274,19 @@ This document defines testable behavioral assertions for the queue-runtime libra
 - AWS: Up to 10 messages per batch
 - Partial batch failures handled correctly
 
+**Provider Notes**:
+
+- **RabbitMQ (AMQP 0-9-1)**: The protocol does not expose a native multi-publish
+  API. `send_messages` iterates over individual publishes sequentially. This is
+  the expected implementation for AMQP; the efficiency gain is connection/channel
+  reuse rather than a batched wire frame.
+- **NATS JetStream**: JetStream does not expose a native batch-publish API.
+  `send_messages` iterates over individual `publish` calls sequentially.
+  The efficiency gain is connection reuse; there is no batched wire frame.
+- For these two providers the assertion that batch operations "are more efficient
+  than individual operations" applies only to the absence of connection
+  establishment overhead, not to any reduction in wire roundtrips.
+
 ## Observability and Monitoring
 
 ### Assertion 21: Distributed Tracing Propagation
