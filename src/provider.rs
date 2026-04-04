@@ -9,6 +9,8 @@ pub enum ProviderType {
     AzureServiceBus,
     AwsSqs,
     InMemory,
+    RabbitMq,
+    Nats,
 }
 
 impl ProviderType {
@@ -18,6 +20,8 @@ impl ProviderType {
             Self::AzureServiceBus => SessionSupport::Native,
             Self::AwsSqs => SessionSupport::Emulated, // Via FIFO queues
             Self::InMemory => SessionSupport::Native,
+            Self::RabbitMq => SessionSupport::Emulated, // Via routing keys and in-memory tracking
+            Self::Nats => SessionSupport::Emulated,     // Via JetStream consumer filter subjects
         }
     }
 
@@ -27,15 +31,27 @@ impl ProviderType {
             Self::AzureServiceBus => true,
             Self::AwsSqs => true,
             Self::InMemory => true,
+            Self::RabbitMq => true,
+            Self::Nats => true,
         }
     }
 
     /// Get maximum message size for provider
+    ///
+    /// # Notes
+    ///
+    /// The NATS limit (1 MB) reflects the JetStream server default
+    /// (`max_payload` setting).  Operators who raise `max_payload` on the
+    /// server can publish larger messages; the client-side check here will
+    /// then be the binding limit until a matching configuration option is
+    /// added.  See the [`NatsConfig`] documentation for guidance.
     pub fn max_message_size(&self) -> usize {
         match self {
             Self::AzureServiceBus => 1024 * 1024, // 1MB
             Self::AwsSqs => 256 * 1024,           // 256KB
             Self::InMemory => 10 * 1024 * 1024,   // 10MB
+            Self::RabbitMq => 128 * 1024 * 1024,  // 128MB (configurable, practical limit)
+            Self::Nats => 1024 * 1024,            // 1MB (NATS server default; see note above)
         }
     }
 }
@@ -79,6 +95,8 @@ pub enum ProviderConfig {
     AzureServiceBus(AzureServiceBusConfig),
     AwsSqs(AwsSqsConfig),
     InMemory(InMemoryConfig),
+    RabbitMq(crate::providers::rabbitmq::RabbitMqConfig),
+    Nats(crate::providers::nats::NatsConfig),
 }
 
 /// Azure Service Bus configuration

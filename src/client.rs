@@ -236,6 +236,18 @@ impl QueueClientFactory {
                     .map_err(|e| e.to_queue_error())?;
                 Box::new(aws_provider)
             }
+            ProviderConfig::RabbitMq(rmq_config) => {
+                let rmq_provider = crate::providers::RabbitMqProvider::new(rmq_config)
+                    .await
+                    .map_err(|e| e.to_queue_error())?;
+                Box::new(rmq_provider)
+            }
+            ProviderConfig::Nats(nats_config) => {
+                let nats_provider = crate::providers::NatsProvider::new(nats_config)
+                    .await
+                    .map_err(|e| e.to_queue_error())?;
+                Box::new(nats_provider)
+            }
         };
 
         // Wrap provider in StandardQueueClient

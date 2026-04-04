@@ -64,6 +64,13 @@ hex = "0.4.3"
 # XML parsing for Azure Service Bus messages
 quick-xml = "0.31.0"
 
+# RabbitMQ AMQP 0-9-1 client
+lapin = "4.4.0"
+
+# NATS messaging client with JetStream support
+async-nats = "0.46.0"
+futures = "0.3.32"
+
 [dev-dependencies]
 # Temporary file creation for tests
 tempfile = "3.24"
