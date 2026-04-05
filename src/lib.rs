@@ -43,11 +43,10 @@ pub use provider::{
 pub use providers::nats::NatsConfig;
 pub use providers::rabbitmq::RabbitMqConfig;
 pub use providers::{
-    AzureAuthMethod, AzureError, AzureServiceBusProvider, AzureSessionProvider,
-    AwsError, AwsSessionProvider, AwsSqsProvider,
-    InMemoryProvider, InMemorySessionProvider,
-    NatsError, NatsProvider, NatsSessionProvider,
-    RabbitMqError, RabbitMqProvider, RabbitMqSessionProvider,
+    AwsError, AwsSessionProvider, AwsSqsProvider, AzureAuthMethod, AzureError,
+    AzureServiceBusProvider, AzureSessionProvider, InMemoryProvider, InMemorySessionProvider,
+    NatsError, NatsProvider, NatsSessionProvider, RabbitMqError, RabbitMqProvider,
+    RabbitMqSessionProvider,
 };
 pub use sessions::{
     CompositeKeyStrategy, FallbackStrategy, NoOrderingStrategy, SessionAffinity,
