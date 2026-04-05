@@ -90,7 +90,6 @@ impl QueueError {
     /// Get suggested retry delay
     pub fn retry_after(&self) -> Option<Duration> {
         match self {
-            Self::InvalidReceipt { .. } => None,
             Self::SessionLocked { .. } => Some(Duration::seconds(5)),
             Self::Timeout { .. } => Some(Duration::seconds(1)),
             Self::ConnectionFailed { .. } => Some(Duration::seconds(5)),

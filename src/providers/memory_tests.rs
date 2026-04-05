@@ -698,7 +698,7 @@ mod acknowledgment {
 
     /// Verify that completing with an invalid receipt handle returns an error.
     ///
-    /// Assertion #6: Invalid receipt handle returns MessageNotFound error.
+    /// Assertion #6: Invalid receipt handle returns InvalidReceipt error.
     #[tokio::test]
     async fn test_complete_with_invalid_receipt_returns_error() {
         let provider = InMemoryProvider::default();
@@ -715,10 +715,10 @@ mod acknowledgment {
 
         assert!(result.is_err(), "Invalid receipt should return error");
         match result.unwrap_err() {
-            QueueError::MessageNotFound { .. } => {
+            QueueError::InvalidReceipt { .. } => {
                 // Expected error
             }
-            other => panic!("Expected MessageNotFound, got {:?}", other),
+            other => panic!("Expected InvalidReceipt, got {:?}", other),
         }
     }
 
@@ -752,10 +752,10 @@ mod acknowledgment {
 
         assert!(result.is_err(), "Expired receipt should return error");
         match result.unwrap_err() {
-            QueueError::MessageNotFound { .. } => {
+            QueueError::InvalidReceipt { .. } => {
                 // Expected error
             }
-            other => panic!("Expected MessageNotFound, got {:?}", other),
+            other => panic!("Expected InvalidReceipt, got {:?}", other),
         }
     }
 
@@ -849,10 +849,10 @@ mod acknowledgment {
 
         assert!(result.is_err(), "Invalid receipt should return error");
         match result.unwrap_err() {
-            QueueError::MessageNotFound { .. } => {
+            QueueError::InvalidReceipt { .. } => {
                 // Expected error
             }
-            other => panic!("Expected MessageNotFound, got {:?}", other),
+            other => panic!("Expected InvalidReceipt, got {:?}", other),
         }
     }
 

@@ -509,7 +509,7 @@ impl QueueProvider for InMemoryProvider {
                 // Check if receipt is expired
                 if inflight.lock_expires_at <= now {
                     queue.in_flight.remove(receipt.handle());
-                    return Err(QueueError::MessageNotFound {
+                    return Err(QueueError::InvalidReceipt {
                         receipt: receipt.handle().to_string(),
                     });
                 }
@@ -521,7 +521,7 @@ impl QueueProvider for InMemoryProvider {
         }
 
         // Receipt not found in any queue
-        Err(QueueError::MessageNotFound {
+        Err(QueueError::InvalidReceipt {
             receipt: receipt.handle().to_string(),
         })
     }
@@ -535,7 +535,7 @@ impl QueueProvider for InMemoryProvider {
             if let Some(inflight) = queue.in_flight.remove(receipt.handle()) {
                 // Check if receipt is expired
                 if inflight.lock_expires_at <= now {
-                    return Err(QueueError::MessageNotFound {
+                    return Err(QueueError::InvalidReceipt {
                         receipt: receipt.handle().to_string(),
                     });
                 }
@@ -556,7 +556,7 @@ impl QueueProvider for InMemoryProvider {
         }
 
         // Receipt not found in any queue
-        Err(QueueError::MessageNotFound {
+        Err(QueueError::InvalidReceipt {
             receipt: receipt.handle().to_string(),
         })
     }
@@ -843,7 +843,7 @@ impl SessionProvider for InMemorySessionProvider {
             }
         }
 
-        Err(QueueError::MessageNotFound {
+        Err(QueueError::InvalidReceipt {
             receipt: receipt.handle().to_string(),
         })
     }
@@ -890,7 +890,7 @@ impl SessionProvider for InMemorySessionProvider {
             }
         }
 
-        Err(QueueError::MessageNotFound {
+        Err(QueueError::InvalidReceipt {
             receipt: receipt.handle().to_string(),
         })
     }
@@ -928,7 +928,7 @@ impl SessionProvider for InMemorySessionProvider {
             }
         }
 
-        Err(QueueError::MessageNotFound {
+        Err(QueueError::InvalidReceipt {
             receipt: receipt.handle().to_string(),
         })
     }
