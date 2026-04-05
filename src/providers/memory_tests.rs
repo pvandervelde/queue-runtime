@@ -144,7 +144,7 @@ mod data_structures {
     #[test]
     fn test_stored_message_with_ttl() {
         let ttl = Duration::seconds(60);
-        let message = Message::new(Bytes::from("test body")).with_ttl(ttl);
+        let message = Message::new(Bytes::from("test body")).with_time_to_live(ttl);
         let message_id = MessageId::new();
         let config = InMemoryConfig::default();
 
@@ -1027,7 +1027,7 @@ mod ttl_and_dlq {
         let queue_name = QueueName::new("ttl-test".to_string()).unwrap();
 
         // Send message with short TTL (2 seconds)
-        let msg = Message::new(Bytes::from("Expires soon")).with_ttl(Duration::seconds(2));
+        let msg = Message::new(Bytes::from("Expires soon")).with_time_to_live(Duration::seconds(2));
 
         provider.send_message(&queue_name, &msg).await.unwrap();
 
@@ -1064,7 +1064,7 @@ mod ttl_and_dlq {
 
         // Send two messages: one with TTL, one without
         let msg_with_ttl =
-            Message::new(Bytes::from("Has TTL")).with_ttl(Duration::milliseconds(500));
+            Message::new(Bytes::from("Has TTL")).with_time_to_live(Duration::milliseconds(500));
         let msg_without_ttl = Message::new(Bytes::from("No TTL"));
 
         provider

@@ -44,7 +44,7 @@ fn test_message_builder() {
         .with_session_id(session_id.clone())
         .with_attribute("key".to_string(), "value".to_string())
         .with_correlation_id("corr-123".to_string())
-        .with_ttl(Duration::minutes(30));
+        .with_time_to_live(Duration::minutes(30));
 
     assert_eq!(message.session_id, Some(session_id));
     assert_eq!(message.attributes.get("key"), Some(&"value".to_string()));

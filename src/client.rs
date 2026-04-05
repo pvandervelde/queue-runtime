@@ -31,6 +31,14 @@ pub trait QueueClient: Send + Sync {
     ) -> Result<Vec<MessageId>, QueueError>;
 
     /// Receive single message from queue
+    ///
+    /// Returns the next available message without regard to session ordering.
+    ///
+    /// # Note
+    ///
+    /// For session-ordered processing (where messages within a session must be
+    /// handled strictly in order), use [`accept_session`](QueueClient::accept_session)
+    /// instead and call `receive_message` on the returned [`SessionClient`].
     async fn receive_message(
         &self,
         queue: &QueueName,
@@ -59,6 +67,15 @@ pub trait QueueClient: Send + Sync {
     ) -> Result<(), QueueError>;
 
     /// Accept session for ordered processing
+    ///
+    /// Acquires an exclusive lock on the specified session and returns a
+    /// [`SessionClient`] that delivers messages from that session in FIFO order.
+    ///
+    /// # Note
+    ///
+    /// For unordered message consumption (no session guarantee required), use
+    /// [`receive_message`](QueueClient::receive_message) directly, which is
+    /// faster and does not require a session lock.
     async fn accept_session(
         &self,
         queue: &QueueName,

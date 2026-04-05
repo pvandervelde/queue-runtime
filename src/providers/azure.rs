@@ -175,7 +175,7 @@ impl AzureError {
                 code: "ServiceBusError".to_string(),
                 message: msg,
             },
-            Self::MessageLockLost(msg) => QueueError::MessageNotFound { receipt: msg },
+            Self::MessageLockLost(msg) => QueueError::InvalidReceipt { receipt: msg },
             Self::SessionLockLost(session_id) => QueueError::SessionNotFound { session_id },
             Self::ConfigurationError(msg) => {
                 QueueError::ConfigurationError(ConfigurationError::Invalid { message: msg })
@@ -1008,7 +1008,7 @@ impl QueueProvider for AzureServiceBusProvider {
         let (lock_token, queue_name) =
             lock_tokens
                 .get(receipt.handle())
-                .ok_or_else(|| QueueError::MessageNotFound {
+                .ok_or_else(|| QueueError::InvalidReceipt {
                     receipt: receipt.handle().to_string(),
                 })?;
 
@@ -1047,7 +1047,7 @@ impl QueueProvider for AzureServiceBusProvider {
             }
             StatusCode::GONE | StatusCode::NOT_FOUND => {
                 // Lock expired or message already processed
-                Err(QueueError::MessageNotFound {
+                Err(QueueError::InvalidReceipt {
                     receipt: receipt.handle().to_string(),
                 })
             }
@@ -1068,7 +1068,7 @@ impl QueueProvider for AzureServiceBusProvider {
         let (lock_token, queue_name) =
             lock_tokens
                 .get(receipt.handle())
-                .ok_or_else(|| QueueError::MessageNotFound {
+                .ok_or_else(|| QueueError::InvalidReceipt {
                     receipt: receipt.handle().to_string(),
                 })?;
 
@@ -1109,7 +1109,7 @@ impl QueueProvider for AzureServiceBusProvider {
             }
             StatusCode::GONE | StatusCode::NOT_FOUND => {
                 // Lock expired or message already processed
-                Err(QueueError::MessageNotFound {
+                Err(QueueError::InvalidReceipt {
                     receipt: receipt.handle().to_string(),
                 })
             }
@@ -1134,7 +1134,7 @@ impl QueueProvider for AzureServiceBusProvider {
         let (lock_token, queue_name) =
             lock_tokens
                 .get(receipt.handle())
-                .ok_or_else(|| QueueError::MessageNotFound {
+                .ok_or_else(|| QueueError::InvalidReceipt {
                     receipt: receipt.handle().to_string(),
                 })?;
 
@@ -1182,7 +1182,7 @@ impl QueueProvider for AzureServiceBusProvider {
             }
             StatusCode::GONE | StatusCode::NOT_FOUND => {
                 // Lock expired or message already processed
-                Err(QueueError::MessageNotFound {
+                Err(QueueError::InvalidReceipt {
                     receipt: receipt.handle().to_string(),
                 })
             }

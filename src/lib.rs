@@ -34,8 +34,7 @@ pub use client::{
 };
 pub use error::{ConfigurationError, QueueError, SerializationError, ValidationError};
 pub use message::{
-    Message, MessageId, QueueName, ReceiptHandle, ReceiveOptions, ReceivedMessage, SendOptions,
-    SessionId, Timestamp,
+    Message, MessageId, QueueName, ReceiptHandle, ReceivedMessage, SessionId, Timestamp,
 };
 pub use provider::{
     AwsSqsConfig, AzureServiceBusConfig, InMemoryConfig, ProviderConfig, ProviderType, QueueConfig,
@@ -43,10 +42,9 @@ pub use provider::{
 };
 pub use providers::nats::NatsConfig;
 pub use providers::rabbitmq::RabbitMqConfig;
-pub use providers::{
-    AzureAuthMethod, AzureServiceBusProvider, AzureSessionProvider, InMemoryProvider,
-    InMemorySessionProvider, NatsError, NatsProvider, NatsSessionProvider, RabbitMqError,
-    RabbitMqProvider, RabbitMqSessionProvider,
+pub use providers::{AzureAuthMethod, AzureError, AzureServiceBusProvider, AzureSessionProvider, AwsError, AwsSessionProvider, AwsSqsProvider,
+    InMemoryProvider, InMemorySessionProvider, NatsError, NatsProvider, NatsSessionProvider,
+    RabbitMqError, RabbitMqProvider, RabbitMqSessionProvider,
 };
 pub use sessions::{
     CompositeKeyStrategy, FallbackStrategy, NoOrderingStrategy, SessionAffinity,

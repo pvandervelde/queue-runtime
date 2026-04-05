@@ -162,7 +162,7 @@ mod header_tests {
     /// Verify that TTL is encoded as expiration property.
     #[test]
     fn test_ttl_encoded_as_expiration() {
-        let message = Message::new(bytes::Bytes::from("body")).with_ttl(Duration::seconds(60));
+        let message = Message::new(bytes::Bytes::from("body")).with_time_to_live(Duration::seconds(60));
 
         let props = RabbitMqProvider::build_properties(&message);
         let expiration = props.expiration().as_ref().map(|s| s.to_string());
@@ -293,7 +293,7 @@ mod header_tests {
     /// Verify that TTL of zero does not set an expiration property.
     #[test]
     fn test_zero_ttl_not_encoded() {
-        let message = Message::new(bytes::Bytes::from("body")).with_ttl(Duration::seconds(0));
+        let message = Message::new(bytes::Bytes::from("body")).with_time_to_live(Duration::seconds(0));
         let props = RabbitMqProvider::build_properties(&message);
         let expiration = props.expiration().as_ref().map(|s| s.to_string());
         assert!(expiration.is_none(), "Zero TTL should not set expiration");
