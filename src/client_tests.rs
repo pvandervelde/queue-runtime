@@ -328,10 +328,7 @@ async fn test_queue_provider_send_message<P: QueueProvider>(provider: &P, queue:
 async fn test_queue_provider_session_support<P: QueueProvider>(provider: &P) {
     let support = provider.supports_sessions();
     assert!(
-        matches!(
-            support,
-            SessionSupport::Native | SessionSupport::Emulated | SessionSupport::Unsupported
-        ),
+        matches!(support, SessionSupport::Native | SessionSupport::Emulated),
         "Should return valid session support level"
     );
 }

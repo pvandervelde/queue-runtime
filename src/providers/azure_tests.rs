@@ -288,8 +288,8 @@ mod error_tests {
         let azure_err = AzureError::MessageLockLost("receipt-123".to_string());
         let queue_err = azure_err.to_queue_error();
         assert!(
-            matches!(queue_err, QueueError::MessageNotFound { .. }),
-            "Should map to MessageNotFound"
+            matches!(queue_err, QueueError::InvalidReceipt { .. }),
+            "Should map to InvalidReceipt"
         );
 
         // Session lock lost

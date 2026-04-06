@@ -294,7 +294,7 @@ impl AwsError {
                 message: msg,
             },
             Self::QueueNotFound(queue) => QueueError::QueueNotFound { queue_name: queue },
-            Self::InvalidReceipt(receipt) => QueueError::MessageNotFound { receipt },
+            Self::InvalidReceipt(receipt) => QueueError::InvalidReceipt { receipt },
             Self::MessageTooLarge { size, max_size } => {
                 QueueError::MessageTooLarge { size, max_size }
             }
@@ -1410,7 +1410,7 @@ impl QueueProvider for AwsSqsProvider {
         let parts: Vec<&str> = handle_str.split('|').collect();
 
         if parts.len() != 2 {
-            return Err(QueueError::MessageNotFound {
+            return Err(QueueError::InvalidReceipt {
                 receipt: handle_str.to_string(),
             });
         }
@@ -1448,7 +1448,7 @@ impl QueueProvider for AwsSqsProvider {
         let parts: Vec<&str> = handle_str.split('|').collect();
 
         if parts.len() != 2 {
-            return Err(QueueError::MessageNotFound {
+            return Err(QueueError::InvalidReceipt {
                 receipt: handle_str.to_string(),
             });
         }
@@ -2089,7 +2089,7 @@ impl SessionProvider for AwsSessionProvider {
         let parts: Vec<&str> = handle_str.split('|').collect();
 
         if parts.len() != 2 {
-            return Err(QueueError::MessageNotFound {
+            return Err(QueueError::InvalidReceipt {
                 receipt: handle_str.to_string(),
             });
         }
@@ -2118,7 +2118,7 @@ impl SessionProvider for AwsSessionProvider {
         let parts: Vec<&str> = handle_str.split('|').collect();
 
         if parts.len() != 2 {
-            return Err(QueueError::MessageNotFound {
+            return Err(QueueError::InvalidReceipt {
                 receipt: handle_str.to_string(),
             });
         }

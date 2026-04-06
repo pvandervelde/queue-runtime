@@ -10,8 +10,11 @@ pub enum QueueError {
     #[error("Queue not found: {queue_name}")]
     QueueNotFound { queue_name: String },
 
-    #[error("Message not found or receipt expired: {receipt}")]
+    #[error("Message not found: {receipt}")]
     MessageNotFound { receipt: String },
+
+    #[error("Invalid or expired receipt handle: {receipt}")]
+    InvalidReceipt { receipt: String },
 
     #[error("Session '{session_id}' is locked until {locked_until}")]
     SessionLocked {
@@ -63,6 +66,7 @@ impl QueueError {
         match self {
             Self::QueueNotFound { .. } => false,
             Self::MessageNotFound { .. } => false,
+            Self::InvalidReceipt { .. } => false,
             Self::SessionLocked { .. } => true,
             Self::SessionNotFound { .. } => false,
             Self::Timeout { .. } => true,

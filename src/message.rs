@@ -284,7 +284,7 @@ impl Message {
     }
 
     /// Add time-to-live for message expiration
-    pub fn with_ttl(mut self, ttl: Duration) -> Self {
+    pub fn with_time_to_live(mut self, ttl: Duration) -> Self {
         self.time_to_live = Some(ttl);
         self
     }

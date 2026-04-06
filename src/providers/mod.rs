@@ -10,7 +10,7 @@ pub mod nats;
 pub mod rabbitmq;
 
 pub use aws::{AwsError, AwsSessionProvider, AwsSqsProvider};
-pub use azure::{AzureAuthMethod, AzureServiceBusProvider, AzureSessionProvider};
+pub use azure::{AzureAuthMethod, AzureError, AzureServiceBusProvider, AzureSessionProvider};
 pub use memory::{InMemoryProvider, InMemorySessionProvider};
 pub use nats::{NatsError, NatsProvider, NatsSessionProvider};
 pub use rabbitmq::{RabbitMqError, RabbitMqProvider, RabbitMqSessionProvider};

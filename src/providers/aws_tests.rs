@@ -239,7 +239,7 @@ mod error_handling_tests {
 
         assert!(matches!(
             queue_error,
-            crate::error::QueueError::MessageNotFound { .. }
+            crate::error::QueueError::InvalidReceipt { .. }
         ));
     }
 }

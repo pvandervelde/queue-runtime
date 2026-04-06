@@ -63,8 +63,6 @@ pub enum SessionSupport {
     Native,
     /// Provider emulates sessions via other mechanisms (AWS SQS FIFO)
     Emulated,
-    /// Provider cannot support session ordering
-    Unsupported,
 }
 
 /// Configuration for queue client initialization
@@ -119,6 +117,10 @@ fn default_auth_method() -> crate::providers::AzureAuthMethod {
 pub struct AwsSqsConfig {
     pub region: String,
     pub access_key_id: Option<String>,
+    /// AWS secret access key. Not serialized to prevent accidental exposure in
+    /// config files or logs; must be supplied at runtime (e.g. from an
+    /// environment variable or secrets manager).
+    #[serde(skip)]
     pub secret_access_key: Option<String>,
     pub use_fifo_queues: bool,
 }
