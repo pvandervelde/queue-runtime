@@ -93,9 +93,10 @@ async fn get_bearer_token(
     cred: &(dyn TokenCredential + Send + Sync),
 ) -> Result<String, AzureError> {
     let scopes = &["https://servicebus.azure.net/.default"];
-    let token = cred.get_token(scopes).await.map_err(|e| {
-        AzureError::AuthenticationError(format!("Failed to get token: {}", e))
-    })?;
+    let token = cred
+        .get_token(scopes)
+        .await
+        .map_err(|e| AzureError::AuthenticationError(format!("Failed to get token: {}", e)))?;
     Ok(token.token.secret().to_string())
 }
 
