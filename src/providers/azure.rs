@@ -74,6 +74,11 @@ mod tests;
 // Shared Auth Helper
 // ============================================================================
 
+/// Acquire a bearer token from an AAD [`TokenCredential`] for the Azure Service Bus scope.
+///
+/// # Errors
+///
+/// Returns [`AzureError::AuthenticationError`] when the credential provider fails.
 async fn get_bearer_token(
     cred: &(dyn TokenCredential + Send + Sync),
 ) -> Result<String, AzureError> {
@@ -95,11 +100,6 @@ async fn get_bearer_token(
 ///
 /// Returns [`AzureError::AuthenticationError`] if the connection string is
 /// missing the required fields or if the key cannot be decoded.
-/// Acquire a bearer token from an AAD [`TokenCredential`] for the Azure Service Bus scope.
-///
-/// # Errors
-///
-/// Returns [`AzureError::AuthenticationError`] when the credential provider fails.
 fn generate_sas_token(namespace_url: &str, conn_str: &str) -> Result<String, AzureError> {
     let mut key_name = None;
     let mut key = None;
