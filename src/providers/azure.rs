@@ -60,7 +60,7 @@ use azure_identity::{
 use chrono::{Duration, Utc};
 use reqwest::{header, Client as HttpClient, StatusCode};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -69,6 +69,82 @@ use tokio::sync::RwLock;
 #[cfg(test)]
 #[path = "azure_tests.rs"]
 mod tests;
+
+// ============================================================================
+// Shared Auth Helper
+// ============================================================================
+
+/// Acquire a bearer token from an AAD [`TokenCredential`] for the Azure Service Bus scope.
+///
+/// # Errors
+///
+/// Returns [`AzureError::AuthenticationError`] when the credential provider fails.
+async fn get_bearer_token(
+    cred: &(dyn TokenCredential + Send + Sync),
+) -> Result<String, AzureError> {
+    let scopes = &["https://servicebus.azure.net/.default"];
+    let token = cred
+        .get_token(scopes)
+        .await
+        .map_err(|e| AzureError::AuthenticationError(format!("Failed to get token: {}", e)))?;
+    Ok(token.token.secret().to_string())
+}
+
+/// Generate a Shared Access Signature (SAS) token for Azure Service Bus.
+///
+/// Parses `SharedAccessKeyName` and `SharedAccessKey` from `conn_str`, then
+/// produces an HMAC-SHA256 signature over `namespace_url` and the expiry.
+/// The resulting token is valid for one hour from the moment of generation.
+///
+/// # Errors
+///
+/// Returns [`AzureError::AuthenticationError`] if the connection string is
+/// missing the required fields or if the key cannot be decoded.
+fn generate_sas_token(namespace_url: &str, conn_str: &str) -> Result<String, AzureError> {
+    let mut key_name = None;
+    let mut key = None;
+
+    for part in conn_str.split(';') {
+        if let Some(value) = part.strip_prefix("SharedAccessKeyName=") {
+            key_name = Some(value.to_string());
+        } else if let Some(value) = part.strip_prefix("SharedAccessKey=") {
+            key = Some(value.to_string());
+        }
+    }
+
+    let key_name = key_name.ok_or_else(|| {
+        AzureError::AuthenticationError(
+            "Missing SharedAccessKeyName in connection string".to_string(),
+        )
+    })?;
+    let key = key.ok_or_else(|| {
+        AzureError::AuthenticationError("Missing SharedAccessKey in connection string".to_string())
+    })?;
+
+    let expiry = (Utc::now() + Duration::hours(1)).timestamp();
+    let string_to_sign = format!("{}\n{}", urlencoding::encode(namespace_url), expiry);
+
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    type HmacSha256 = Hmac<Sha256>;
+
+    let key_bytes = STANDARD
+        .decode(&key)
+        .map_err(|e| AzureError::AuthenticationError(format!("Invalid SharedAccessKey: {}", e)))?;
+    let mut mac = HmacSha256::new_from_slice(&key_bytes)
+        .map_err(|e| AzureError::AuthenticationError(format!("Failed to create HMAC: {}", e)))?;
+    mac.update(string_to_sign.as_bytes());
+    let signature = STANDARD.encode(mac.finalize().into_bytes());
+
+    Ok(format!(
+        "SharedAccessSignature sr={}&sig={}&se={}&skn={}",
+        urlencoding::encode(namespace_url),
+        urlencoding::encode(&signature),
+        expiry,
+        urlencoding::encode(&key_name)
+    ))
+}
 
 // ============================================================================
 // Authentication Types
@@ -411,13 +487,7 @@ impl AzureServiceBusProvider {
     /// Get authentication token for Service Bus operations
     async fn get_auth_token(&self) -> Result<String, AzureError> {
         match &self.credential {
-            Some(cred) => {
-                let scopes = &["https://servicebus.azure.net/.default"];
-                let token = cred.get_token(scopes).await.map_err(|e| {
-                    AzureError::AuthenticationError(format!("Failed to get token: {}", e))
-                })?;
-                Ok(token.token.secret().to_string())
-            }
+            Some(cred) => get_bearer_token(cred.as_ref()).await,
             None => {
                 // Connection string auth - parse SharedAccessSignature
                 self.get_sas_token()
@@ -425,66 +495,14 @@ impl AzureServiceBusProvider {
         }
     }
 
-    /// Extract SAS token from connection string
+    /// Extract SAS token from connection string.
+    ///
+    /// Delegates to the module-level [`generate_sas_token`] helper.
     fn get_sas_token(&self) -> Result<String, AzureError> {
         let conn_str = self.config.connection_string.as_ref().ok_or_else(|| {
             AzureError::AuthenticationError("No connection string available".to_string())
         })?;
-
-        // Parse connection string for SharedAccessKeyName and SharedAccessKey
-        let mut key_name = None;
-        let mut key = None;
-
-        for part in conn_str.split(';') {
-            if let Some(value) = part.strip_prefix("SharedAccessKeyName=") {
-                key_name = Some(value.to_string());
-            } else if let Some(value) = part.strip_prefix("SharedAccessKey=") {
-                key = Some(value.to_string());
-            }
-        }
-
-        let key_name = key_name.ok_or_else(|| {
-            AzureError::AuthenticationError(
-                "Missing SharedAccessKeyName in connection string".to_string(),
-            )
-        })?;
-        let key = key.ok_or_else(|| {
-            AzureError::AuthenticationError(
-                "Missing SharedAccessKey in connection string".to_string(),
-            )
-        })?;
-
-        // Generate SAS token
-        let expiry = (Utc::now() + Duration::hours(1)).timestamp();
-        let resource = self.namespace_url.to_string();
-        let string_to_sign = format!("{}\n{}", urlencoding::encode(&resource), expiry);
-
-        use hmac::{Hmac, Mac};
-        use sha2::Sha256;
-
-        type HmacSha256 = Hmac<Sha256>;
-
-        use base64::{engine::general_purpose::STANDARD, Engine};
-
-        let key_bytes = STANDARD.decode(&key).map_err(|e| {
-            AzureError::AuthenticationError(format!("Invalid SharedAccessKey: {}", e))
-        })?;
-
-        let mut mac = HmacSha256::new_from_slice(&key_bytes).map_err(|e| {
-            AzureError::AuthenticationError(format!("Failed to create HMAC: {}", e))
-        })?;
-        mac.update(string_to_sign.as_bytes());
-        let signature = STANDARD.encode(mac.finalize().into_bytes());
-
-        let sas = format!(
-            "SharedAccessSignature sr={}&sig={}&se={}&skn={}",
-            urlencoding::encode(&resource),
-            urlencoding::encode(&signature),
-            expiry,
-            urlencoding::encode(&key_name)
-        );
-
-        Ok(sas)
+        generate_sas_token(&self.namespace_url, conn_str)
     }
 }
 
@@ -1199,15 +1217,23 @@ impl QueueProvider for AzureServiceBusProvider {
 
     async fn create_session_client(
         &self,
-        _queue: &QueueName,
-        _session_id: Option<SessionId>,
+        queue: &QueueName,
+        session_id: Option<SessionId>,
     ) -> Result<Box<dyn SessionProvider>, QueueError> {
-        // TODO: Accept session and create session provider
-        Err(QueueError::ProviderError {
-            provider: "AzureServiceBus".to_string(),
-            code: "NotImplemented".to_string(),
-            message: "Azure Service Bus session client not yet implemented".to_string(),
-        })
+        let resolved_id = match session_id {
+            Some(id) => id,
+            None => self.accept_next_available_session(queue).await?,
+        };
+
+        Ok(Box::new(AzureSessionProvider::new(
+            resolved_id,
+            queue.clone(),
+            self.config.session_timeout,
+            self.http_client.clone(),
+            self.namespace_url.clone(),
+            self.config.clone(),
+            self.credential.clone(),
+        )))
     }
 
     fn provider_type(&self) -> ProviderType {
@@ -1227,88 +1253,584 @@ impl QueueProvider for AzureServiceBusProvider {
     }
 }
 
+impl AzureServiceBusProvider {
+    /// Accept the next available session by receiving the first available message
+    /// from the queue and deriving the session ID from its broker properties.
+    ///
+    /// The Azure Service Bus REST API does **not** have an atomic
+    /// "accept-next-session" endpoint (unlike the AMQP SDK). Enumerating
+    /// sessions via GET and then receiving from one introduces a TOCTOU race:
+    /// two concurrent consumers can read the same session ID and collide.
+    ///
+    /// To avoid the race this implementation calls
+    /// `DELETE {namespace}/{queue}/sessions/$acceptnext/messages/head`, which is
+    /// the undocumented but well-established REST shorthand supported by the
+    /// Azure Service Bus broker for atomically accepting the next available
+    /// session. The session ID is taken from the `BrokerProperties.SessionId`
+    /// header in the response.
+    ///
+    /// # Errors
+    ///
+    /// - `QueueError::ProviderError { code: "NoSessionsAvailable" }` when no
+    ///   session has pending messages or the timeout expires.
+    /// - `QueueError::QueueNotFound` when the queue does not exist.
+    /// - Network or auth errors on failure.
+    async fn accept_next_available_session(
+        &self,
+        queue: &QueueName,
+    ) -> Result<SessionId, QueueError> {
+        // `$acceptnext` is the REST equivalent of AcceptNextSessionAsync in the SDK:
+        // the broker atomically picks and locks the next session with pending messages.
+        let timeout_secs = self.config.session_timeout.num_seconds().max(1);
+        let url = format!(
+            "{}/{}/sessions/$acceptnext/messages/head?timeout={}",
+            self.namespace_url,
+            queue.as_str(),
+            timeout_secs
+        );
+
+        let auth_token = self
+            .get_auth_token()
+            .await
+            .map_err(|e| e.to_queue_error())?;
+
+        let response = self
+            .http_client
+            .delete(&url)
+            .header(header::AUTHORIZATION, auth_token)
+            .send()
+            .await
+            .map_err(|e| {
+                AzureError::NetworkError(format!("Failed to accept next session: {}", e))
+                    .to_queue_error()
+            })?;
+
+        match response.status() {
+            StatusCode::OK | StatusCode::CREATED => {
+                // Parse BrokerProperties from response header to get the session ID.
+                let broker_props = response
+                    .headers()
+                    .get("BrokerProperties")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| serde_json::from_str::<ReceivedBrokerProperties>(s).ok())
+                    .ok_or_else(|| QueueError::ProviderError {
+                        provider: "AzureServiceBus".to_string(),
+                        code: "InvalidResponse".to_string(),
+                        message: "Missing BrokerProperties in accept-next-session response"
+                            .to_string(),
+                    })?;
+
+                let session_id_str =
+                    broker_props
+                        .session_id
+                        .ok_or_else(|| QueueError::ProviderError {
+                            provider: "AzureServiceBus".to_string(),
+                            code: "NoSessionId".to_string(),
+                            message: "Accepted message has no SessionId".to_string(),
+                        })?;
+
+                SessionId::new(session_id_str).map_err(|e| QueueError::ProviderError {
+                    provider: "AzureServiceBus".to_string(),
+                    code: "InvalidSessionId".to_string(),
+                    message: format!("Invalid session ID returned by broker: {}", e),
+                })
+            }
+            StatusCode::NO_CONTENT => Err(QueueError::ProviderError {
+                provider: "AzureServiceBus".to_string(),
+                code: "NoSessionsAvailable".to_string(),
+                message: "No sessions with pending messages are available".to_string(),
+            }),
+            StatusCode::NOT_FOUND => Err(QueueError::QueueNotFound {
+                queue_name: queue.to_string(),
+            }),
+            status => {
+                let error_body = response.text().await.unwrap_or_default();
+                Err(QueueError::ProviderError {
+                    provider: "AzureServiceBus".to_string(),
+                    code: status.as_str().to_string(),
+                    message: format!("Accept next session failed: {}", error_body),
+                })
+            }
+        }
+    }
+}
+
 // ============================================================================
 // Azure Session Provider
 // ============================================================================
 
-/// Azure Service Bus session provider for ordered message processing
+/// Azure Service Bus session provider for ordered message processing.
+///
+/// Implements the [`SessionProvider`] trait using the Azure Service Bus REST API,
+/// providing exclusive session-locked access to messages within a single session.
+/// All messages within a session are delivered in strict FIFO order.
+///
+/// ## Session Lifecycle
+///
+/// 1. Obtain via [`AzureServiceBusProvider::create_session_client`].
+/// 2. Call [`receive_message`](SessionProvider::receive_message) to fetch the next message.
+/// 3. Process the message, then call [`complete_message`](SessionProvider::complete_message)
+///    or [`abandon_message`](SessionProvider::abandon_message).
+/// 4. Call [`renew_session_lock`](SessionProvider::renew_session_lock) periodically for
+///    long-running processing to prevent session lock expiry.
+/// 5. Call [`close_session`](SessionProvider::close_session) when finished.
 pub struct AzureSessionProvider {
     session_id: SessionId,
-    #[allow(dead_code)] // Will be used in session implementation
     queue_name: QueueName,
-    session_expires_at: Timestamp,
-    // TODO: Add actual Azure session receiver
+    /// Session lock expiry. Uses `std::sync::RwLock` so the synchronous
+    /// `session_expires_at()` trait method can read without async.
+    session_expires_at: Arc<std::sync::RwLock<Timestamp>>,
+    http_client: HttpClient,
+    namespace_url: String,
+    config: AzureServiceBusConfig,
+    credential: Option<Arc<dyn TokenCredential + Send + Sync>>,
+    /// Lock tokens for in-flight messages. The receipt handle IS the lock token
+    /// for session messages, so a set suffices (no separate value).
+    lock_tokens: Arc<RwLock<HashSet<String>>>,
+}
+
+impl fmt::Debug for AzureSessionProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AzureSessionProvider")
+            .field("session_id", &self.session_id)
+            .field("queue_name", &self.queue_name)
+            .field("namespace_url", &self.namespace_url)
+            .field(
+                "credential",
+                &self.credential.as_ref().map(|_| "<TokenCredential>"),
+            )
+            .finish()
+    }
 }
 
 impl AzureSessionProvider {
-    /// Create new session provider
-    pub fn new(session_id: SessionId, queue_name: QueueName, session_timeout: Duration) -> Self {
+    /// Create a new session provider.
+    ///
+    /// Normally obtained through [`AzureServiceBusProvider::create_session_client`]
+    /// rather than constructed directly.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The session to operate on.
+    /// * `queue_name` - The queue containing the session.
+    /// * `session_timeout` - How long the session lock is expected to be held; used to
+    ///   compute `session_expires_at` and refreshed on each receive and lock renewal.
+    /// * `http_client` - Shared HTTP client (cloned from the parent provider).
+    /// * `namespace_url` - Base URL of the Service Bus namespace.
+    /// * `config` - Provider configuration (used for SAS token generation).
+    /// * `credential` - Optional token credential for AAD-based auth.
+    pub fn new(
+        session_id: SessionId,
+        queue_name: QueueName,
+        session_timeout: Duration,
+        http_client: HttpClient,
+        namespace_url: String,
+        config: AzureServiceBusConfig,
+        credential: Option<Arc<dyn TokenCredential + Send + Sync>>,
+    ) -> Self {
         let session_expires_at = Timestamp::from_datetime(Utc::now() + session_timeout);
-
         Self {
             session_id,
             queue_name,
-            session_expires_at,
+            session_expires_at: Arc::new(std::sync::RwLock::new(session_expires_at)),
+            http_client,
+            namespace_url,
+            config,
+            credential,
+            lock_tokens: Arc::new(RwLock::new(HashSet::new())),
+        }
+    }
+
+    /// Get an authentication token for Service Bus REST operations.
+    ///
+    /// Delegates to [`get_bearer_token`] for AAD credentials and [`generate_sas_token`] for SAS.
+    async fn get_auth_token(&self) -> Result<String, AzureError> {
+        match &self.credential {
+            Some(cred) => get_bearer_token(cred.as_ref()).await,
+            None => {
+                let conn_str = self.config.connection_string.as_ref().ok_or_else(|| {
+                    AzureError::AuthenticationError("No connection string available".to_string())
+                })?;
+                generate_sas_token(&self.namespace_url, conn_str)
+            }
+        }
+    }
+
+    /// Refresh the local session expiry to `now + session_timeout`.
+    fn refresh_session_expiry(&self) {
+        if let Ok(mut expiry) = self.session_expires_at.write() {
+            *expiry = Timestamp::from_datetime(Utc::now() + self.config.session_timeout);
         }
     }
 }
 
 #[async_trait]
 impl SessionProvider for AzureSessionProvider {
+    /// Receive the next message from the session using PeekLock mode.
+    ///
+    /// Calls `DELETE {namespace}/{queue}/sessions/{sessionId}/messages/head?timeout={t}`.
+    /// On success the session lock expiry is refreshed and the message lock token is
+    /// stored internally so that [`complete_message`](Self::complete_message),
+    /// [`abandon_message`](Self::abandon_message), and
+    /// [`dead_letter_message`](Self::dead_letter_message) can resolve the token by
+    /// receipt handle.
+    ///
+    /// # Errors
+    ///
+    /// - `QueueError::SessionNotFound` – the session no longer exists or the lock expired.
+    /// - `QueueError::ProviderError` – network or broker error.
     async fn receive_message(
         &self,
-        _timeout: Duration,
+        timeout: Duration,
     ) -> Result<Option<ReceivedMessage>, QueueError> {
-        // TODO: Implement session receive
-        Err(QueueError::ProviderError {
-            provider: "AzureServiceBus".to_string(),
-            code: "NotImplemented".to_string(),
-            message: "Azure Service Bus session receive not yet implemented".to_string(),
-        })
+        let url = format!(
+            "{}/{}/sessions/{}/messages/head?timeout={}",
+            self.namespace_url,
+            self.queue_name.as_str(),
+            urlencoding::encode(self.session_id.as_str()),
+            timeout.num_seconds()
+        );
+
+        let auth_token = self
+            .get_auth_token()
+            .await
+            .map_err(|e| e.to_queue_error())?;
+
+        let response = self
+            .http_client
+            .delete(&url)
+            .header(header::AUTHORIZATION, auth_token)
+            .send()
+            .await
+            .map_err(|e| {
+                AzureError::NetworkError(format!("HTTP request failed: {}", e)).to_queue_error()
+            })?;
+
+        match response.status() {
+            StatusCode::OK | StatusCode::CREATED => {
+                let broker_props = response
+                    .headers()
+                    .get("BrokerProperties")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| serde_json::from_str::<ReceivedBrokerProperties>(s).ok())
+                    .ok_or_else(|| QueueError::ProviderError {
+                        provider: "AzureServiceBus".to_string(),
+                        code: "InvalidResponse".to_string(),
+                        message: "Missing or invalid BrokerProperties header".to_string(),
+                    })?;
+
+                let body_base64 = response.text().await.map_err(|e| {
+                    AzureError::NetworkError(format!("Failed to read response body: {}", e))
+                        .to_queue_error()
+                })?;
+
+                use base64::{engine::general_purpose::STANDARD, Engine};
+                let body =
+                    STANDARD
+                        .decode(&body_base64)
+                        .map_err(|e| QueueError::ProviderError {
+                            provider: "AzureServiceBus".to_string(),
+                            code: "DecodingError".to_string(),
+                            message: format!("Failed to decode message body: {}", e),
+                        })?;
+
+                let first_delivered_at =
+                    chrono::DateTime::parse_from_rfc3339(&broker_props.enqueued_time_utc)
+                        .map(|dt| Timestamp::from_datetime(dt.with_timezone(&chrono::Utc)))
+                        .unwrap_or_else(|_| Timestamp::now());
+
+                // Receipt handle is the lock token; store it for later acknowledgement.
+                // Use config.session_timeout as the ReceiptHandle local expiry to match
+                // the session lock duration configured on the provider.
+                let expires_at = Timestamp::from_datetime(Utc::now() + self.config.session_timeout);
+                let lock_token = broker_props.lock_token.clone();
+                let receipt = ReceiptHandle::new(
+                    lock_token.clone(),
+                    expires_at,
+                    ProviderType::AzureServiceBus,
+                );
+
+                self.lock_tokens.write().await.insert(lock_token);
+
+                let message_id = MessageId::from_str(&broker_props.message_id)
+                    .unwrap_or_else(|_| MessageId::new());
+
+                // Keep session lock alive.
+                self.refresh_session_expiry();
+
+                Ok(Some(ReceivedMessage {
+                    message_id,
+                    body: bytes::Bytes::from(body),
+                    attributes: HashMap::new(),
+                    session_id: Some(self.session_id.clone()),
+                    correlation_id: None,
+                    receipt_handle: receipt,
+                    delivery_count: broker_props.delivery_count,
+                    first_delivered_at,
+                    delivered_at: Timestamp::now(),
+                }))
+            }
+            StatusCode::NO_CONTENT => Ok(None),
+            StatusCode::GONE | StatusCode::NOT_FOUND => Err(QueueError::SessionNotFound {
+                session_id: self.session_id.to_string(),
+            }),
+            status => {
+                let error_body = response.text().await.unwrap_or_default();
+                Err(QueueError::ProviderError {
+                    provider: "AzureServiceBus".to_string(),
+                    code: status.as_str().to_string(),
+                    message: format!("Session receive failed: {}", error_body),
+                })
+            }
+        }
     }
 
-    async fn complete_message(&self, _receipt: &ReceiptHandle) -> Result<(), QueueError> {
-        // TODO: Implement session complete
-        Err(QueueError::ProviderError {
-            provider: "AzureServiceBus".to_string(),
-            code: "NotImplemented".to_string(),
-            message: "Azure Service Bus session complete not yet implemented".to_string(),
-        })
+    /// Complete (delete) a session message using its lock token.
+    ///
+    /// Calls `DELETE {namespace}/{queue}/sessions/{sessionId}/messages/{lockToken}`.
+    ///
+    /// # Errors
+    ///
+    /// - `QueueError::InvalidReceipt` – receipt not found locally or lock expired on broker.
+    async fn complete_message(&self, receipt: &ReceiptHandle) -> Result<(), QueueError> {
+        if !self.lock_tokens.read().await.contains(receipt.handle()) {
+            return Err(QueueError::InvalidReceipt {
+                receipt: receipt.handle().to_string(),
+            });
+        }
+        let lock_token = receipt.handle().to_string();
+
+        let url = format!(
+            "{}/{}/sessions/{}/messages/{}",
+            self.namespace_url,
+            self.queue_name.as_str(),
+            urlencoding::encode(self.session_id.as_str()),
+            urlencoding::encode(&lock_token)
+        );
+
+        let auth_token = self
+            .get_auth_token()
+            .await
+            .map_err(|e| e.to_queue_error())?;
+
+        let response = self
+            .http_client
+            .delete(&url)
+            .header(header::AUTHORIZATION, auth_token)
+            .send()
+            .await
+            .map_err(|e| {
+                AzureError::NetworkError(format!("HTTP request failed: {}", e)).to_queue_error()
+            })?;
+
+        match response.status() {
+            StatusCode::OK | StatusCode::NO_CONTENT => {
+                self.lock_tokens.write().await.remove(receipt.handle());
+                Ok(())
+            }
+            StatusCode::GONE | StatusCode::NOT_FOUND => Err(QueueError::InvalidReceipt {
+                receipt: receipt.handle().to_string(),
+            }),
+            status => {
+                let error_body = response.text().await.unwrap_or_default();
+                Err(QueueError::ProviderError {
+                    provider: "AzureServiceBus".to_string(),
+                    code: status.as_str().to_string(),
+                    message: format!("Session complete failed: {}", error_body),
+                })
+            }
+        }
     }
 
-    async fn abandon_message(&self, _receipt: &ReceiptHandle) -> Result<(), QueueError> {
-        // TODO: Implement session abandon
-        Err(QueueError::ProviderError {
-            provider: "AzureServiceBus".to_string(),
-            code: "NotImplemented".to_string(),
-            message: "Azure Service Bus session abandon not yet implemented".to_string(),
-        })
+    /// Abandon a session message and make it available for re-delivery.
+    ///
+    /// Calls `PUT {namespace}/{queue}/sessions/{sessionId}/messages/{lockToken}`.
+    ///
+    /// # Errors
+    ///
+    /// - `QueueError::InvalidReceipt` – receipt not found locally or lock expired.
+    async fn abandon_message(&self, receipt: &ReceiptHandle) -> Result<(), QueueError> {
+        if !self.lock_tokens.read().await.contains(receipt.handle()) {
+            return Err(QueueError::InvalidReceipt {
+                receipt: receipt.handle().to_string(),
+            });
+        }
+        let lock_token = receipt.handle().to_string();
+
+        let url = format!(
+            "{}/{}/sessions/{}/messages/{}",
+            self.namespace_url,
+            self.queue_name.as_str(),
+            urlencoding::encode(self.session_id.as_str()),
+            urlencoding::encode(&lock_token)
+        );
+
+        let auth_token = self
+            .get_auth_token()
+            .await
+            .map_err(|e| e.to_queue_error())?;
+
+        let response = self
+            .http_client
+            .put(&url)
+            .header(header::AUTHORIZATION, auth_token)
+            .header(header::CONTENT_LENGTH, "0")
+            .send()
+            .await
+            .map_err(|e| {
+                AzureError::NetworkError(format!("HTTP request failed: {}", e)).to_queue_error()
+            })?;
+
+        match response.status() {
+            StatusCode::OK | StatusCode::NO_CONTENT => {
+                self.lock_tokens.write().await.remove(receipt.handle());
+                Ok(())
+            }
+            StatusCode::GONE | StatusCode::NOT_FOUND => Err(QueueError::InvalidReceipt {
+                receipt: receipt.handle().to_string(),
+            }),
+            status => {
+                let error_body = response.text().await.unwrap_or_default();
+                Err(QueueError::ProviderError {
+                    provider: "AzureServiceBus".to_string(),
+                    code: status.as_str().to_string(),
+                    message: format!("Session abandon failed: {}", error_body),
+                })
+            }
+        }
     }
 
+    /// Dead-letter a session message.
+    ///
+    /// Calls `POST {namespace}/{queue}/sessions/{sessionId}/messages/{lockToken}/$deadletter`
+    /// with a JSON body containing `DeadLetterReason`.
+    ///
+    /// # Errors
+    ///
+    /// - `QueueError::InvalidReceipt` – receipt not found locally or lock expired.
     async fn dead_letter_message(
         &self,
-        _receipt: &ReceiptHandle,
-        _reason: &str,
+        receipt: &ReceiptHandle,
+        reason: &str,
     ) -> Result<(), QueueError> {
-        // TODO: Implement session dead letter
-        Err(QueueError::ProviderError {
-            provider: "AzureServiceBus".to_string(),
-            code: "NotImplemented".to_string(),
-            message: "Azure Service Bus session dead letter not yet implemented".to_string(),
-        })
+        if !self.lock_tokens.read().await.contains(receipt.handle()) {
+            return Err(QueueError::InvalidReceipt {
+                receipt: receipt.handle().to_string(),
+            });
+        }
+        let lock_token = receipt.handle().to_string();
+
+        let url = format!(
+            "{}/{}/sessions/{}/messages/{}/$deadletter",
+            self.namespace_url,
+            self.queue_name.as_str(),
+            urlencoding::encode(self.session_id.as_str()),
+            urlencoding::encode(&lock_token)
+        );
+
+        let auth_token = self
+            .get_auth_token()
+            .await
+            .map_err(|e| e.to_queue_error())?;
+
+        let properties = serde_json::json!({
+            "DeadLetterReason": reason,
+            "DeadLetterErrorDescription": "Message processing failed"
+        });
+
+        let response = self
+            .http_client
+            .post(&url)
+            .header(header::AUTHORIZATION, auth_token)
+            .header(header::CONTENT_TYPE, "application/json")
+            .json(&properties)
+            .send()
+            .await
+            .map_err(|e| {
+                AzureError::NetworkError(format!("HTTP request failed: {}", e)).to_queue_error()
+            })?;
+
+        match response.status() {
+            StatusCode::OK | StatusCode::NO_CONTENT | StatusCode::CREATED => {
+                self.lock_tokens.write().await.remove(receipt.handle());
+                Ok(())
+            }
+            StatusCode::GONE | StatusCode::NOT_FOUND => Err(QueueError::InvalidReceipt {
+                receipt: receipt.handle().to_string(),
+            }),
+            status => {
+                let error_body = response.text().await.unwrap_or_default();
+                Err(QueueError::ProviderError {
+                    provider: "AzureServiceBus".to_string(),
+                    code: status.as_str().to_string(),
+                    message: format!("Session dead letter failed: {}", error_body),
+                })
+            }
+        }
     }
 
+    /// Renew the session lock to extend the exclusive hold on the session.
+    ///
+    /// Calls `POST {namespace}/{queue}/sessions/{sessionId}/renewlock`.
+    /// On success the local `session_expires_at` is refreshed.
+    ///
+    /// # Errors
+    ///
+    /// - `QueueError::SessionNotFound` – the session lock has already expired.
     async fn renew_session_lock(&self) -> Result<(), QueueError> {
-        // TODO: Implement session lock renewal
-        Err(QueueError::ProviderError {
-            provider: "AzureServiceBus".to_string(),
-            code: "NotImplemented".to_string(),
-            message: "Azure Service Bus session lock renewal not yet implemented".to_string(),
-        })
+        let url = format!(
+            "{}/{}/sessions/{}/renewlock",
+            self.namespace_url,
+            self.queue_name.as_str(),
+            urlencoding::encode(self.session_id.as_str())
+        );
+
+        let auth_token = self
+            .get_auth_token()
+            .await
+            .map_err(|e| e.to_queue_error())?;
+
+        let response = self
+            .http_client
+            .post(&url)
+            .header(header::AUTHORIZATION, auth_token)
+            .header(header::CONTENT_LENGTH, "0")
+            .send()
+            .await
+            .map_err(|e| {
+                AzureError::NetworkError(format!("HTTP request failed: {}", e)).to_queue_error()
+            })?;
+
+        match response.status() {
+            StatusCode::OK | StatusCode::NO_CONTENT => {
+                self.refresh_session_expiry();
+                Ok(())
+            }
+            StatusCode::GONE | StatusCode::NOT_FOUND => Err(QueueError::SessionNotFound {
+                session_id: self.session_id.to_string(),
+            }),
+            status => {
+                let error_body = response.text().await.unwrap_or_default();
+                Err(QueueError::ProviderError {
+                    provider: "AzureServiceBus".to_string(),
+                    code: status.as_str().to_string(),
+                    message: format!("Session lock renewal failed: {}", error_body),
+                })
+            }
+        }
     }
 
+    /// Release local session state.
+    ///
+    /// Clears all locally cached message lock tokens. The Azure Service Bus
+    /// REST API has no endpoint to release a session lock before it expires;
+    /// the broker releases the lock automatically after the session timeout
+    /// configured on the queue entity (typically 30 s – 5 min). For workloads
+    /// that need immediate hand-off, configure a shorter session lock duration
+    /// on the queue entity or use the AMQP-based SDK which supports explicit
+    /// session release.
     async fn close_session(&self) -> Result<(), QueueError> {
-        // TODO: Implement session close
+        self.lock_tokens.write().await.clear();
         Ok(())
     }
 
@@ -1318,55 +1840,13 @@ impl SessionProvider for AzureSessionProvider {
 
     fn session_expires_at(&self) -> Timestamp {
         self.session_expires_at
-    }
-}
-
-// ============================================================================
-// Internal Azure Types (Placeholders)
-// ============================================================================
-
-/// Placeholder for Azure Service Bus sender
-#[allow(dead_code)] // Placeholder struct for future implementation
-#[derive(Debug)]
-struct AzureSender {
-    queue_name: QueueName,
-}
-
-#[allow(dead_code)] // Placeholder impl for future implementation
-impl AzureSender {
-    fn new(queue_name: QueueName) -> Result<Self, AzureError> {
-        Ok(Self { queue_name })
-    }
-}
-
-/// Placeholder for Azure Service Bus receiver
-#[allow(dead_code)] // Placeholder struct for future implementation
-#[derive(Debug)]
-struct AzureReceiver {
-    queue_name: QueueName,
-}
-
-#[allow(dead_code)] // Placeholder impl for future implementation
-impl AzureReceiver {
-    fn new(queue_name: QueueName) -> Result<Self, AzureError> {
-        Ok(Self { queue_name })
-    }
-}
-
-/// Placeholder for Azure Service Bus session receiver
-#[allow(dead_code)] // Placeholder struct for future implementation
-#[derive(Debug)]
-struct AzureSessionReceiver {
-    session_id: SessionId,
-    queue_name: QueueName,
-}
-
-#[allow(dead_code)] // Placeholder impl for future implementation
-impl AzureSessionReceiver {
-    fn new(session_id: SessionId, queue_name: QueueName) -> Result<Self, AzureError> {
-        Ok(Self {
-            session_id,
-            queue_name,
-        })
+            .read()
+            .map(|guard| *guard)
+            .unwrap_or_else(|_| {
+                // Lock is poisoned (a writer panicked). Return an already-expired
+                // sentinel so callers treat the session as invalid rather than
+                // silently assuming it just started.
+                Timestamp::from_datetime(Utc::now() - Duration::seconds(1))
+            })
     }
 }

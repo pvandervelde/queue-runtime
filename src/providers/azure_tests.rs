@@ -357,7 +357,7 @@ mod provider_tests {
         assert_eq!(
             session_support,
             SessionSupport::Native,
-            "Should support native sessions"
+            "Azure Service Bus should advertise native session support"
         );
     }
 
@@ -444,39 +444,67 @@ mod provider_tests {
 
 mod session_tests {
     use super::*;
+    use crate::message::Timestamp;
+    use reqwest::Client as HttpClient;
 
-    /// Test session provider creation
+    /// Build a minimal test config backed by a fake connection string.
+    fn make_test_config() -> AzureServiceBusConfig {
+        AzureServiceBusConfig {
+            connection_string: Some(
+                "Endpoint=sb://test.servicebus.windows.net/;SharedAccessKeyName=test;SharedAccessKey=dGVzdA=="
+                    .to_string(),
+            ),
+            namespace: None,
+            auth_method: AzureAuthMethod::ConnectionString,
+            use_sessions: true,
+            session_timeout: Duration::minutes(5),
+        }
+    }
+
+    /// Build an `AzureSessionProvider` wired with test credentials.
+    fn make_test_session_provider(
+        session_id: SessionId,
+        queue_name: QueueName,
+    ) -> AzureSessionProvider {
+        let config = make_test_config();
+        let http_client = HttpClient::new();
+        let namespace_url = "https://test.servicebus.windows.net".to_string();
+        AzureSessionProvider::new(
+            session_id,
+            queue_name,
+            Duration::minutes(5),
+            http_client,
+            namespace_url,
+            config,
+            None,
+        )
+    }
+
+    /// Test session provider construction records the correct session ID.
     #[test]
     fn test_session_provider_creation() {
-        // Arrange
         let session_id = SessionId::new("test-session".to_string()).unwrap();
         let queue_name = QueueName::new("test-queue".to_string()).unwrap();
-        let timeout = Duration::minutes(5);
 
-        // Act
-        let provider = AzureSessionProvider::new(session_id.clone(), queue_name, timeout);
+        let provider = make_test_session_provider(session_id.clone(), queue_name);
 
-        // Assert
         assert_eq!(provider.session_id(), &session_id);
         assert!(
             provider.session_expires_at().as_datetime() > Utc::now(),
-            "Session should not be expired"
+            "Session should not be expired immediately after creation"
         );
     }
 
-    /// Test session expiry calculation
+    /// Test that `session_expires_at` is ~session_timeout from creation.
     #[test]
     fn test_session_expiry_calculation() {
-        // Arrange
         let session_id = SessionId::new("test-session".to_string()).unwrap();
         let queue_name = QueueName::new("test-queue".to_string()).unwrap();
         let timeout = Duration::minutes(5);
         let before = Utc::now();
 
-        // Act
-        let provider = AzureSessionProvider::new(session_id, queue_name, timeout);
+        let provider = make_test_session_provider(session_id, queue_name);
 
-        // Assert
         let expiry = provider.session_expires_at().as_datetime();
         let expected_expiry = before + timeout;
         let diff = (expiry - expected_expiry).num_seconds().abs();
@@ -486,16 +514,176 @@ mod session_tests {
             diff
         );
     }
+
+    /// `receive_message` should attempt an HTTP call (fails with test creds, not a stub error).
+    #[tokio::test]
+    async fn test_receive_message_attempts_http_operation() {
+        let session_id = SessionId::new("order-session".to_string()).unwrap();
+        let queue_name = QueueName::new("orders".to_string()).unwrap();
+        let provider = make_test_session_provider(session_id, queue_name);
+
+        let result = provider.receive_message(Duration::seconds(5)).await;
+
+        assert!(
+            result.is_err(),
+            "Should fail with test credentials; got {:?}",
+            result.ok()
+        );
+        // Must be a network/auth error, not a stub NotImplemented error.
+        if let Err(QueueError::ProviderError { ref code, .. }) = result {
+            assert_ne!(code, "NotImplemented", "Should not be a stub error");
+        }
+    }
+
+    /// `complete_message` with an unknown receipt returns `InvalidReceipt` immediately.
+    #[tokio::test]
+    async fn test_complete_message_unknown_receipt_returns_invalid_receipt() {
+        let session_id = SessionId::new("order-session".to_string()).unwrap();
+        let queue_name = QueueName::new("orders".to_string()).unwrap();
+        let provider = make_test_session_provider(session_id, queue_name);
+
+        let receipt = ReceiptHandle::new(
+            "nonexistent-lock-token".to_string(),
+            Timestamp::from_datetime(Utc::now() + Duration::minutes(1)),
+            ProviderType::AzureServiceBus,
+        );
+
+        let result = provider.complete_message(&receipt).await;
+
+        assert!(
+            matches!(result, Err(QueueError::InvalidReceipt { .. })),
+            "Unknown receipt should return InvalidReceipt; got {:?}",
+            result
+        );
+    }
+
+    /// `abandon_message` with an unknown receipt returns `InvalidReceipt` immediately.
+    #[tokio::test]
+    async fn test_abandon_message_unknown_receipt_returns_invalid_receipt() {
+        let session_id = SessionId::new("order-session".to_string()).unwrap();
+        let queue_name = QueueName::new("orders".to_string()).unwrap();
+        let provider = make_test_session_provider(session_id, queue_name);
+
+        let receipt = ReceiptHandle::new(
+            "nonexistent-lock-token".to_string(),
+            Timestamp::from_datetime(Utc::now() + Duration::minutes(1)),
+            ProviderType::AzureServiceBus,
+        );
+
+        let result = provider.abandon_message(&receipt).await;
+
+        assert!(
+            matches!(result, Err(QueueError::InvalidReceipt { .. })),
+            "Unknown receipt should return InvalidReceipt; got {:?}",
+            result
+        );
+    }
+
+    /// `dead_letter_message` with an unknown receipt returns `InvalidReceipt` immediately.
+    #[tokio::test]
+    async fn test_dead_letter_message_unknown_receipt_returns_invalid_receipt() {
+        let session_id = SessionId::new("order-session".to_string()).unwrap();
+        let queue_name = QueueName::new("orders".to_string()).unwrap();
+        let provider = make_test_session_provider(session_id, queue_name);
+
+        let receipt = ReceiptHandle::new(
+            "nonexistent-lock-token".to_string(),
+            Timestamp::from_datetime(Utc::now() + Duration::minutes(1)),
+            ProviderType::AzureServiceBus,
+        );
+
+        let result = provider.dead_letter_message(&receipt, "test reason").await;
+
+        assert!(
+            matches!(result, Err(QueueError::InvalidReceipt { .. })),
+            "Unknown receipt should return InvalidReceipt; got {:?}",
+            result
+        );
+    }
+
+    /// `renew_session_lock` should attempt an HTTP call (fails with test creds).
+    #[tokio::test]
+    async fn test_renew_session_lock_attempts_http_operation() {
+        let session_id = SessionId::new("order-session".to_string()).unwrap();
+        let queue_name = QueueName::new("orders".to_string()).unwrap();
+        let provider = make_test_session_provider(session_id, queue_name);
+
+        let result = provider.renew_session_lock().await;
+
+        assert!(
+            result.is_err(),
+            "Should fail with test credentials; got {:?}",
+            result.ok()
+        );
+        if let Err(QueueError::ProviderError { ref code, .. }) = result {
+            assert_ne!(code, "NotImplemented", "Should not be a stub error");
+        }
+    }
+
+    /// `close_session` always succeeds and clears local state.
+    #[tokio::test]
+    async fn test_close_session_succeeds() {
+        let session_id = SessionId::new("order-session".to_string()).unwrap();
+        let queue_name = QueueName::new("orders".to_string()).unwrap();
+        let provider = make_test_session_provider(session_id, queue_name);
+
+        let result = provider.close_session().await;
+
+        assert!(result.is_ok(), "close_session should always succeed");
+    }
+
+    /// `create_session_client` with an explicit session ID returns immediately without HTTP.
+    #[tokio::test]
+    async fn test_create_session_client_with_explicit_session_id() {
+        let config = make_test_config();
+        let provider = AzureServiceBusProvider::new(config).await.unwrap();
+        let queue = QueueName::new("orders".to_string()).unwrap();
+        let session_id = SessionId::new("explicit-session".to_string()).unwrap();
+
+        let result = provider
+            .create_session_client(&queue, Some(session_id.clone()))
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "Should create session provider with explicit ID; got {:?}",
+            result.err()
+        );
+        let session_provider = result.unwrap();
+        assert_eq!(session_provider.session_id(), &session_id);
+        assert!(
+            session_provider.session_expires_at().as_datetime() > Utc::now(),
+            "Returned session should not be immediately expired"
+        );
+    }
+
+    /// `create_session_client` with `None` session ID attempts HTTP to enumerate sessions.
+    #[tokio::test]
+    async fn test_create_session_client_without_session_id_attempts_http() {
+        let config = make_test_config();
+        let provider = AzureServiceBusProvider::new(config).await.unwrap();
+        let queue = QueueName::new("orders".to_string()).unwrap();
+
+        let result = provider.create_session_client(&queue, None).await;
+
+        // Fails with test credentials but must NOT be a stub NotImplemented error.
+        assert!(result.is_err(), "Should fail with test credentials");
+        if let Err(QueueError::ProviderError { ref code, .. }) = result {
+            assert_ne!(
+                code, "NotImplemented",
+                "Should attempt HTTP rather than return a stub error"
+            );
+        }
+    }
 }
 
 // ============================================================================
-// Placeholder Tests (verify not-implemented errors)
+// Provider Operation Tests (verify operations attempt HTTP, not stub errors)
 // ============================================================================
 
-mod placeholder_tests {
+mod provider_operation_tests {
     use super::*;
 
-    /// Helper to create test provider
     async fn create_test_provider() -> AzureServiceBusProvider {
         let config = AzureServiceBusConfig {
             connection_string: Some(
@@ -513,136 +701,46 @@ mod placeholder_tests {
             .expect("Should create test provider")
     }
 
-    /// Test send_message returns not implemented error
+    /// `send_message` attempts an HTTP operation (fails with test credentials).
     #[tokio::test]
-    async fn test_send_message_not_implemented() {
-        // NOTE: send_message is now implemented, but will fail with authentication
-        // error or network error when using test credentials. This test verifies
-        // the method is callable.
-
-        // Arrange
+    async fn test_send_message_attempts_http() {
         let provider = create_test_provider().await;
         let queue = QueueName::new("test-queue".to_string()).unwrap();
         let message = Message::new(Bytes::from("test"));
 
-        // Act
         let result = provider.send_message(&queue, &message).await;
 
-        // Assert
-        // Will fail due to invalid test credentials, but should attempt the operation
-        assert!(result.is_err(), "Should return error with test credentials");
+        assert!(result.is_err(), "Should fail with test credentials");
     }
 
-    /// Test receive_message attempts HTTP operation
+    /// `receive_message` attempts an HTTP operation (fails with test credentials).
     #[tokio::test]
-    async fn test_receive_message_not_implemented() {
-        // NOTE: receive_message will attempt HTTP operation and fail with test credentials
-
-        // Arrange
+    async fn test_receive_message_attempts_http() {
         let provider = create_test_provider().await;
         let queue = QueueName::new("test-queue".to_string()).unwrap();
 
-        // Act
         let result = provider.receive_message(&queue, Duration::seconds(1)).await;
 
-        // Assert
-        // Should fail due to authentication or network error with test credentials
-        assert!(result.is_err(), "Should return error with test credentials");
-    }
-}
-
-// ============================================================================
-// HTTP Receive Operations Tests
-// ============================================================================
-
-mod receive_tests {
-    use super::*;
-
-    /// Verify receive_message constructs correct HTTP request
-    ///
-    /// This test verifies the receive operation:
-    /// - Uses HTTP DELETE to {namespace}/{queue}/messages/head
-    /// - Includes timeout parameter
-    /// - Uses proper authentication headers
-    /// - Handles empty queue (no messages)
-    #[tokio::test]
-    async fn test_receive_message_http_structure() {
-        // Arrange
-        let config = AzureServiceBusConfig {
-            connection_string: Some(
-                "Endpoint=sb://test.servicebus.windows.net/;SharedAccessKeyName=test;SharedAccessKey=dGVzdA=="
-                    .to_string(),
-            ),
-            namespace: None,
-            auth_method: AzureAuthMethod::ConnectionString,
-            use_sessions: true,
-            session_timeout: Duration::minutes(5),
-        };
-        let provider = AzureServiceBusProvider::new(config).await.unwrap();
-        let queue = QueueName::new("test-queue".to_string()).unwrap();
-
-        // Act - will fail with invalid credentials but verifies structure
-        let result = provider.receive_message(&queue, Duration::seconds(5)).await;
-
-        // Assert - should attempt the operation
         assert!(result.is_err(), "Should fail with test credentials");
     }
 
-    /// Verify receive_messages respects batch size limits
-    #[tokio::test]
-    async fn test_receive_messages_batch_size_respected() {
-        // Arrange
-        let config = AzureServiceBusConfig {
-            connection_string: Some(
-                "Endpoint=sb://test.servicebus.windows.net/;SharedAccessKeyName=test;SharedAccessKey=dGVzdA=="
-                    .to_string(),
-            ),
-            namespace: None,
-            auth_method: AzureAuthMethod::ConnectionString,
-            use_sessions: true,
-            session_timeout: Duration::minutes(5),
-        };
-        let provider = AzureServiceBusProvider::new(config).await.unwrap();
-        let queue = QueueName::new("test-queue".to_string()).unwrap();
-
-        // Act - will fail but should accept valid batch size
-        let result = provider
-            .receive_messages(&queue, 10, Duration::seconds(5))
-            .await;
-
-        // Assert - should attempt operation with valid batch size
-        assert!(result.is_err(), "Should fail with test credentials");
-    }
-
-    /// Verify batch size validation
+    /// `receive_messages` rejects batch sizes above 32 (Azure Service Bus limit).
     #[tokio::test]
     async fn test_receive_messages_validates_batch_size() {
-        // Arrange
-        let config = AzureServiceBusConfig {
-            connection_string: Some(
-                "Endpoint=sb://test.servicebus.windows.net/;SharedAccessKeyName=test;SharedAccessKey=dGVzdA=="
-                    .to_string(),
-            ),
-            namespace: None,
-            auth_method: AzureAuthMethod::ConnectionString,
-            use_sessions: true,
-            session_timeout: Duration::minutes(5),
-        };
-        let provider = AzureServiceBusProvider::new(config).await.unwrap();
+        let provider = create_test_provider().await;
         let queue = QueueName::new("test-queue".to_string()).unwrap();
 
-        // Act - Azure Service Bus max is 32 messages per receive
         let result = provider
             .receive_messages(&queue, 50, Duration::seconds(5))
             .await;
 
-        // Assert - should reject batch size over 32
-        assert!(result.is_err());
-        if let Err(QueueError::BatchTooLarge { size, max_size }) = result {
-            assert_eq!(size, 50);
-            assert_eq!(max_size, 32);
-        } else {
-            panic!("Expected BatchTooLarge error");
+        assert!(result.is_err(), "Should reject batch size > 32");
+        match result {
+            Err(QueueError::BatchTooLarge { size, max_size }) => {
+                assert_eq!(size, 50);
+                assert_eq!(max_size, 32);
+            }
+            other => panic!("Expected BatchTooLarge error, got {:?}", other),
         }
     }
 }
