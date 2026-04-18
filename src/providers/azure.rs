@@ -84,6 +84,21 @@ mod tests;
 ///
 /// Returns [`AzureError::AuthenticationError`] if the connection string is
 /// missing the required fields or if the key cannot be decoded.
+/// Acquire a bearer token from an AAD [`TokenCredential`] for the Azure Service Bus scope.
+///
+/// # Errors
+///
+/// Returns [`AzureError::AuthenticationError`] when the credential provider fails.
+async fn get_bearer_token(
+    cred: &(dyn TokenCredential + Send + Sync),
+) -> Result<String, AzureError> {
+    let scopes = &["https://servicebus.azure.net/.default"];
+    let token = cred.get_token(scopes).await.map_err(|e| {
+        AzureError::AuthenticationError(format!("Failed to get token: {}", e))
+    })?;
+    Ok(token.token.secret().to_string())
+}
+
 fn generate_sas_token(namespace_url: &str, conn_str: &str) -> Result<String, AzureError> {
     let mut key_name = None;
     let mut key = None;
@@ -471,13 +486,7 @@ impl AzureServiceBusProvider {
     /// Get authentication token for Service Bus operations
     async fn get_auth_token(&self) -> Result<String, AzureError> {
         match &self.credential {
-            Some(cred) => {
-                let scopes = &["https://servicebus.azure.net/.default"];
-                let token = cred.get_token(scopes).await.map_err(|e| {
-                    AzureError::AuthenticationError(format!("Failed to get token: {}", e))
-                })?;
-                Ok(token.token.secret().to_string())
-            }
+            Some(cred) => get_bearer_token(cred.as_ref()).await,
             None => {
                 // Connection string auth - parse SharedAccessSignature
                 self.get_sas_token()
@@ -1244,15 +1253,6 @@ impl QueueProvider for AzureServiceBusProvider {
 }
 
 impl AzureServiceBusProvider {
-    /// Accept the next available session on the queue by listing sessions and taking the first.
-    ///
-    /// Uses `GET {namespace}/{queue}/sessions?skip=0&top=1` to enumerate sessions,
-    /// then returns the ID of the first available one.
-    ///
-    /// # Errors
-    ///
-    /// Returns `QueueError::ProviderError` with code `NoSessionsAvailable` when no
-    /// sessions have pending messages, or a network/auth error on failure.
     /// Accept the next available session by receiving the first available message
     /// from the queue and deriving the session ID from its broker properties.
     ///
@@ -1280,10 +1280,12 @@ impl AzureServiceBusProvider {
     ) -> Result<SessionId, QueueError> {
         // `$acceptnext` is the REST equivalent of AcceptNextSessionAsync in the SDK:
         // the broker atomically picks and locks the next session with pending messages.
+        let timeout_secs = self.config.session_timeout.num_seconds().max(1);
         let url = format!(
-            "{}/{}/sessions/$acceptnext/messages/head?timeout=30",
+            "{}/{}/sessions/$acceptnext/messages/head?timeout={}",
             self.namespace_url,
-            queue.as_str()
+            queue.as_str(),
+            timeout_secs
         );
 
         let auth_token = self
@@ -1440,16 +1442,10 @@ impl AzureSessionProvider {
 
     /// Get an authentication token for Service Bus REST operations.
     ///
-    /// Delegates to the shared [`generate_sas_token`] helper for SAS-based auth.
+    /// Delegates to [`get_bearer_token`] for AAD credentials and [`generate_sas_token`] for SAS.
     async fn get_auth_token(&self) -> Result<String, AzureError> {
         match &self.credential {
-            Some(cred) => {
-                let scopes = &["https://servicebus.azure.net/.default"];
-                let token = cred.get_token(scopes).await.map_err(|e| {
-                    AzureError::AuthenticationError(format!("Failed to get token: {}", e))
-                })?;
-                Ok(token.token.secret().to_string())
-            }
+            Some(cred) => get_bearer_token(cred.as_ref()).await,
             None => {
                 let conn_str = self.config.connection_string.as_ref().ok_or_else(|| {
                     AzureError::AuthenticationError("No connection string available".to_string())
