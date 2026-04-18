@@ -567,10 +567,18 @@ impl QueueProvider for InMemoryProvider {
         _reason: &str,
     ) -> Result<(), QueueError> {
         let mut storage = self.storage.write().unwrap();
+        let now = Timestamp::now();
 
         // Find the queue containing this receipt and move the message to DLQ
         for queue in storage.queues.values_mut() {
             if let Some(inflight) = queue.in_flight.remove(receipt.handle()) {
+                // Check if receipt is expired
+                if inflight.lock_expires_at <= now {
+                    return Err(QueueError::InvalidReceipt {
+                        receipt: receipt.handle().to_string(),
+                    });
+                }
+
                 queue.dead_letter.push_back(inflight.message);
                 return Ok(());
             }
