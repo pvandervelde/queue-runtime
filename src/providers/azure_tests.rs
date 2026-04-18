@@ -723,4 +723,24 @@ mod provider_operation_tests {
 
         assert!(result.is_err(), "Should fail with test credentials");
     }
+
+    /// `receive_messages` rejects batch sizes above 32 (Azure Service Bus limit).
+    #[tokio::test]
+    async fn test_receive_messages_validates_batch_size() {
+        let provider = create_test_provider().await;
+        let queue = QueueName::new("test-queue".to_string()).unwrap();
+
+        let result = provider
+            .receive_messages(&queue, 50, Duration::seconds(5))
+            .await;
+
+        assert!(result.is_err(), "Should reject batch size > 32");
+        match result {
+            Err(QueueError::BatchTooLarge { size, max_size }) => {
+                assert_eq!(size, 50);
+                assert_eq!(max_size, 32);
+            }
+            other => panic!("Expected BatchTooLarge error, got {:?}", other),
+        }
+    }
 }

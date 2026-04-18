@@ -404,3 +404,53 @@ mod fifo_tests {
         assert!(true, "Deduplication tested through batch operations");
     }
 }
+
+// ============================================================================
+// Session Message Tests
+// ============================================================================
+
+mod session_message_tests {
+    use super::*;
+
+    /// Verify a message with a session ID has that ID set on the envelope.
+    #[test]
+    fn test_session_message_carries_session_id() {
+        let session_id = SessionId::new("order-42".to_string()).unwrap();
+        let msg = create_test_message_with_session("payload", session_id.clone());
+
+        assert_eq!(
+            msg.session_id.as_ref(),
+            Some(&session_id),
+            "Message should carry the provided session ID"
+        );
+    }
+
+    /// Messages without a session ID have `None` as the session field.
+    #[test]
+    fn test_regular_message_has_no_session_id() {
+        let msg = create_test_message("payload");
+
+        assert!(
+            msg.session_id.is_none(),
+            "Regular message should have no session ID"
+        );
+    }
+
+    /// Sending a session-tagged message to a standard (non-FIFO) queue returns an error.
+    #[tokio::test]
+    async fn test_send_session_message_to_standard_queue_fails() {
+        let config = create_test_provider_config(false); // standard (non-FIFO) queue
+        let provider = AwsSqsProvider::new(config).await.unwrap();
+        let queue = QueueName::new("test-queue".to_string()).unwrap();
+
+        let session_id = SessionId::new("order-42".to_string()).unwrap();
+        let msg = create_test_message_with_session("payload", session_id);
+
+        let result = provider.send_message(&queue, &msg).await;
+
+        assert!(
+            result.is_err(),
+            "Sending a session message to a standard queue should fail"
+        );
+    }
+}
