@@ -74,6 +74,17 @@ mod tests;
 // Shared Auth Helper
 // ============================================================================
 
+async fn get_bearer_token(
+    cred: &(dyn TokenCredential + Send + Sync),
+) -> Result<String, AzureError> {
+    let scopes = &["https://servicebus.azure.net/.default"];
+    let token = cred
+        .get_token(scopes)
+        .await
+        .map_err(|e| AzureError::AuthenticationError(format!("Failed to get token: {}", e)))?;
+    Ok(token.token.secret().to_string())
+}
+
 /// Generate a Shared Access Signature (SAS) token for Azure Service Bus.
 ///
 /// Parses `SharedAccessKeyName` and `SharedAccessKey` from `conn_str`, then
@@ -89,17 +100,6 @@ mod tests;
 /// # Errors
 ///
 /// Returns [`AzureError::AuthenticationError`] when the credential provider fails.
-async fn get_bearer_token(
-    cred: &(dyn TokenCredential + Send + Sync),
-) -> Result<String, AzureError> {
-    let scopes = &["https://servicebus.azure.net/.default"];
-    let token = cred
-        .get_token(scopes)
-        .await
-        .map_err(|e| AzureError::AuthenticationError(format!("Failed to get token: {}", e)))?;
-    Ok(token.token.secret().to_string())
-}
-
 fn generate_sas_token(namespace_url: &str, conn_str: &str) -> Result<String, AzureError> {
     let mut key_name = None;
     let mut key = None;
