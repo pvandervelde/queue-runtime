@@ -1292,6 +1292,101 @@ mod ttl_and_dlq {
         assert!(result.is_none(), "Message should be in DLQ");
     }
 
+    /// Verify that dead_letter_message moves a message to the DLQ.
+    ///
+    /// After dead_letter_message, the message is removed from in-flight and
+    /// placed on the dead-letter queue, not redelivered.
+    #[tokio::test]
+    async fn test_dead_letter_message_moves_to_dlq() {
+        let provider = InMemoryProvider::default();
+        let queue_name = QueueName::new("dlq-direct-test".to_string()).unwrap();
+
+        let msg = Message::new(Bytes::from("Dead letter me"));
+        provider.send_message(&queue_name, &msg).await.unwrap();
+
+        let received = provider
+            .receive_message(&queue_name, Duration::seconds(30))
+            .await
+            .unwrap()
+            .unwrap();
+
+        provider
+            .dead_letter_message(&received.receipt_handle, "test reason")
+            .await
+            .unwrap();
+
+        // Message should not be receivable from the main queue anymore
+        let result = provider
+            .receive_message(&queue_name, Duration::seconds(30))
+            .await
+            .unwrap();
+        assert!(
+            result.is_none(),
+            "Message should not be in main queue after dead-lettering"
+        );
+    }
+
+    /// Verify that dead_letter_message with an invalid receipt returns an error.
+    #[tokio::test]
+    async fn test_dead_letter_message_invalid_receipt_returns_error() {
+        let provider = InMemoryProvider::default();
+
+        let now = Timestamp::now();
+        let expires_at = Timestamp::from_datetime(now.as_datetime() + Duration::seconds(30));
+        let invalid_receipt = ReceiptHandle::new(
+            "invalid-dlq-receipt-123".to_string(),
+            expires_at,
+            ProviderType::InMemory,
+        );
+
+        let result = provider
+            .dead_letter_message(&invalid_receipt, "test reason")
+            .await;
+
+        assert!(result.is_err(), "Invalid receipt should return error");
+        match result.unwrap_err() {
+            QueueError::InvalidReceipt { .. } => {}
+            other => panic!("Expected InvalidReceipt, got {:?}", other),
+        }
+    }
+
+    /// Verify that dead_letter_message with an expired receipt returns an error.
+    ///
+    /// An expired lock means the message was already returned to the visible
+    /// queue by the expiry sweep; acting on it must be rejected rather than
+    /// silently removing it from in-flight.
+    #[tokio::test]
+    async fn test_dead_letter_message_expired_receipt_returns_error() {
+        let provider = InMemoryProvider::default();
+        let queue_name = QueueName::new("dlq-expired-test".to_string()).unwrap();
+
+        let msg = Message::new(Bytes::from("Expires before DLQ"));
+        provider.send_message(&queue_name, &msg).await.unwrap();
+
+        // Receive the message (visibility timeout is 30 seconds, hardcoded)
+        let received = provider
+            .receive_message(&queue_name, Duration::seconds(30))
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Wait for the lock to expire (30s timeout + small buffer)
+        tokio::time::sleep(tokio::time::Duration::from_secs(31)).await;
+
+        let result = provider
+            .dead_letter_message(&received.receipt_handle, "too late")
+            .await;
+
+        assert!(
+            result.is_err(),
+            "Expired receipt should return error from dead_letter_message"
+        );
+        match result.unwrap_err() {
+            QueueError::InvalidReceipt { .. } => {}
+            other => panic!("Expected InvalidReceipt, got {:?}", other),
+        }
+    }
+
     /// Verify that default TTL from config is applied to messages without explicit TTL.
     #[tokio::test]
     async fn test_default_message_ttl_applied() {

@@ -563,11 +563,31 @@ impl QueueProvider for InMemoryProvider {
 
     async fn dead_letter_message(
         &self,
-        _receipt: &ReceiptHandle,
+        receipt: &ReceiptHandle,
         _reason: &str,
     ) -> Result<(), QueueError> {
-        // TODO: Implement in subtask 10.4
-        unimplemented!("dead_letter_message will be implemented in subtask 10.4")
+        let mut storage = self.storage.write().unwrap();
+        let now = Timestamp::now();
+
+        // Find the queue containing this receipt and move the message to DLQ
+        for queue in storage.queues.values_mut() {
+            if let Some(inflight) = queue.in_flight.remove(receipt.handle()) {
+                // Check if receipt is expired
+                if inflight.lock_expires_at <= now {
+                    return Err(QueueError::InvalidReceipt {
+                        receipt: receipt.handle().to_string(),
+                    });
+                }
+
+                queue.dead_letter.push_back(inflight.message);
+                return Ok(());
+            }
+        }
+
+        // Receipt not found in any queue
+        Err(QueueError::InvalidReceipt {
+            receipt: receipt.handle().to_string(),
+        })
     }
 
     async fn create_session_client(
