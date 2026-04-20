@@ -32,14 +32,14 @@ footer = """
         {% if release.previous -%}
             {% if release.previous.version -%}
                 [{{ release.version | trim_start_matches(pat="v") }}]: \
-                    https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}\
+                    https://github.com/pvandervelde/queue-runtime\
                         /compare/{{ release.previous.version }}..{{ release.version }}
             {% endif -%}
         {% endif -%}
     {% else -%}
         {% if release.previous -%}
             {% if release.previous.version -%}
-                [unreleased]: https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}\
+                [unreleased]: https://github.com/pvandervelde/queue-runtime\
                     /compare/{{ release.previous.version }}..HEAD
             {% endif -%}
         {% endif -%}
