@@ -50,6 +50,10 @@ footer = """
 # remove the leading and trailing whitespace from the templates
 trim = true
 
+[remote.github]
+owner = "pvandervelde"
+repo = "queue-runtime"
+
 # postprocessors
 postprocessors = [
     { pattern = '<REPO>', replace = "https://github.com/pvandervelde/queue-runtime" }, # replace repository URL
