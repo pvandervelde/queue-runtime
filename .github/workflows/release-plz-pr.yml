@@ -4,6 +4,7 @@ on:
     push:
         branches:
             - master
+    workflow_dispatch: {}
 
 # Prevent concurrent runs from creating duplicate or conflicting PRs.
 concurrency:
