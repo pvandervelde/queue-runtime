@@ -1,6 +1,13 @@
 # git-cliff ~ configuration file
 # https://git-cliff.org/docs/configuration
 
+[bump]
+# Always bump minor for feat commits, even on 0.x.y versions.
+# Without this, git-cliff defaults features_always_bump_minor=false, which
+# treats feat as a patch bump when major version is 0.
+features_always_bump_minor = true
+breaking_always_bump_major = true
+
 [changelog]
 # template for the changelog footer
 header = """
