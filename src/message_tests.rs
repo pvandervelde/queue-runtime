@@ -403,3 +403,117 @@ fn test_timestamp_display() {
     assert!(display.contains("10:30:45"));
     assert!(display.contains("UTC"));
 }
+
+// ============================================================================
+// Property-Based Tests
+// ============================================================================
+
+mod property_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Any string longer than 260 characters is always rejected by QueueName.
+        #[test]
+        fn queue_name_rejects_strings_over_260_chars(
+            base in "[a-zA-Z0-9]{1,50}",
+            extra in "[a-zA-Z0-9]{211,500}",
+        ) {
+            let long = format!("{}{}", base, extra);
+            prop_assume!(long.len() > 260);
+            let result = QueueName::new(long);
+            prop_assert!(result.is_err(), "strings > 260 chars must be rejected");
+        }
+
+        /// Any non-ASCII character anywhere in the string causes rejection.
+        #[test]
+        fn queue_name_rejects_non_ascii(
+            prefix in "[a-zA-Z0-9]{1,10}",
+            // Unicode scalar > 127
+            non_ascii in proptest::char::range('\u{0080}', '\u{07FF}'),
+            suffix in "[a-zA-Z0-9]{0,10}",
+        ) {
+            let s = format!("{}{}{}", prefix, non_ascii, suffix);
+            let result = QueueName::new(s);
+            prop_assert!(result.is_err(), "non-ASCII chars must be rejected");
+        }
+
+        /// Alphanumeric-only strings of length 1-260 are always accepted.
+        #[test]
+        fn queue_name_accepts_alphanumeric_strings(
+            s in "[a-zA-Z0-9]{1,260}",
+        ) {
+            let result = QueueName::new(s);
+            prop_assert!(result.is_ok(), "pure alphanumeric strings must be accepted");
+        }
+
+        /// Any string longer than 128 characters must be rejected by SessionId.
+        #[test]
+        fn session_id_rejects_strings_over_128_chars(
+            base in "[a-zA-Z0-9 ]{1,50}",
+            extra in "[a-zA-Z0-9]{79,200}",
+        ) {
+            let long = format!("{}{}", base, extra);
+            prop_assume!(long.len() > 128);
+            let result = SessionId::new(long);
+            prop_assert!(result.is_err(), "strings > 128 chars must be rejected");
+        }
+
+        /// ASCII control characters (0x00-0x1F) anywhere in the string cause rejection.
+        #[test]
+        fn session_id_rejects_control_characters(
+            prefix in "[a-zA-Z0-9]{1,10}",
+            ctrl in 0u8..=31u8,
+            suffix in "[a-zA-Z0-9]{0,10}",
+        ) {
+            let s = format!("{}{}{}", prefix, ctrl as char, suffix);
+            let result = SessionId::new(s);
+            prop_assert!(result.is_err(), "control chars must be rejected");
+        }
+
+        /// Any non-ASCII character causes SessionId rejection.
+        #[test]
+        fn session_id_rejects_non_ascii(
+            prefix in "[a-zA-Z0-9]{1,10}",
+            non_ascii in proptest::char::range('\u{0080}', '\u{07FF}'),
+            suffix in "[a-zA-Z0-9]{0,10}",
+        ) {
+            let s = format!("{}{}{}", prefix, non_ascii, suffix);
+            let result = SessionId::new(s);
+            prop_assert!(result.is_err(), "non-ASCII chars must be rejected");
+        }
+
+        /// ASCII printable strings of length 1-128 are always accepted by SessionId.
+        #[test]
+        fn session_id_accepts_printable_ascii(
+            s in "[\\x20-\\x7E]{1,128}",
+        ) {
+            let result = SessionId::new(s);
+            prop_assert!(result.is_ok(), "printable ASCII strings (1-128 chars) must be accepted");
+        }
+
+        /// MessageId::new() always produces a non-empty, distinct value.
+        #[test]
+        fn message_id_is_always_non_empty(_dummy in 0u32..1000u32) {
+            let id = MessageId::new();
+            prop_assert!(!id.as_str().is_empty(), "generated MessageId must not be empty");
+        }
+
+        /// Two MessageId::new() calls always produce distinct values (UUID v4).
+        #[test]
+        fn message_id_is_unique(_dummy in 0u32..100u32) {
+            let id1 = MessageId::new();
+            let id2 = MessageId::new();
+            prop_assert_ne!(id1.as_str(), id2.as_str(), "consecutive MessageIds must be distinct");
+        }
+
+        /// QueueName round-trips through Display and FromStr correctly.
+        #[test]
+        fn queue_name_display_round_trips(s in "[a-zA-Z0-9]{1,50}") {
+            let original = QueueName::new(s.clone()).expect("valid input");
+            let displayed = format!("{}", original);
+            let reparsed: QueueName = displayed.parse().expect("should re-parse");
+            prop_assert_eq!(original, reparsed);
+        }
+    }
+}

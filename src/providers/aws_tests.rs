@@ -125,9 +125,8 @@ mod signature_tests {
     /// Verify canonical request formation
     #[test]
     fn test_canonical_request_format() {
-        // This is tested indirectly through HTTP operations
-        // Direct testing would require exposing internal methods
-        assert!(true, "Canonical request tested through operations");
+        // This is tested indirectly through HTTP operations.
+        // Direct testing would require exposing internal methods.
     }
 }
 
@@ -399,9 +398,8 @@ mod fifo_tests {
     /// Test message deduplication ID generation
     #[tokio::test]
     async fn test_message_deduplication_id_generation() {
-        // Deduplication IDs are generated from SHA-256 hash of message content
-        // This is tested indirectly through batch send operations
-        assert!(true, "Deduplication tested through batch operations");
+        // Deduplication IDs are generated from SHA-256 hash of message content.
+        // This is tested indirectly through batch send operations.
     }
 }
 
@@ -451,6 +449,40 @@ mod session_message_tests {
         assert!(
             result.is_err(),
             "Sending a session message to a standard queue should fail"
+        );
+    }
+}
+
+// ============================================================================
+// Security Tests — credential redaction in Debug output
+// ============================================================================
+
+mod security_tests {
+    use super::*;
+
+    /// `AwsSqsConfig` must not expose `secret_access_key` through its Debug impl.
+    ///
+    /// `secret_access_key` is marked `#[serde(skip)]` to prevent serialisation
+    /// exposure, but the derived `Debug` impl will still print the value unless
+    /// the type overrides `fmt::Debug` manually.  This test enforces that
+    /// requirement.
+    #[test]
+    fn aws_config_debug_does_not_expose_secret_key() {
+        let config = AwsSqsConfig {
+            region: "us-east-1".to_string(),
+            access_key_id: Some("AKIAIOSFODNN7EXAMPLE".to_string()),
+            secret_access_key: Some("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
+            use_fifo_queues: false,
+        };
+
+        let debug_output = format!("{:?}", config);
+
+        assert!(
+            !debug_output.contains("wJalrXUtnFEMI"),
+            "Debug output must not contain the raw secret key value. \
+             Add a custom Debug impl that emits \"<REDACTED>\" for secret_access_key. \
+             Got: {}",
+            debug_output
         );
     }
 }
