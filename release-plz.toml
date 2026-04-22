@@ -28,3 +28,7 @@ publish_allow_dirty = false
 
 # disable running `cargo-semver-checks`
 semver_check = true
+
+# always bump minor version for feat commits, even in 0.x releases
+# (by default, release-plz only bumps minor starting with 1.x)
+features_always_increment_minor = true
