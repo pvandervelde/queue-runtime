@@ -101,6 +101,7 @@ pub enum ProviderConfig {
 /// Azure Service Bus configuration
 #[derive(Clone, Serialize, Deserialize)]
 pub struct AzureServiceBusConfig {
+    #[serde(skip_serializing)]
     pub connection_string: Option<String>,
     pub namespace: Option<String>,
     #[serde(skip, default = "default_auth_method")]

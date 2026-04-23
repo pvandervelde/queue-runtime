@@ -121,13 +121,6 @@ mod signature_tests {
         // Credentials will be fetched when making requests
         assert_eq!(provider.provider_type(), ProviderType::AwsSqs);
     }
-
-    /// Verify canonical request formation
-    #[test]
-    fn test_canonical_request_format() {
-        // This is tested indirectly through HTTP operations.
-        // Direct testing would require exposing internal methods.
-    }
 }
 
 // ============================================================================
@@ -393,13 +386,6 @@ mod fifo_tests {
             !AwsSqsProvider::is_fifo_queue(&QueueName::new(standard_name.to_string()).unwrap()),
             "Standard queue should not be detected as FIFO"
         );
-    }
-
-    /// Test message deduplication ID generation
-    #[tokio::test]
-    async fn test_message_deduplication_id_generation() {
-        // Deduplication IDs are generated from SHA-256 hash of message content.
-        // This is tested indirectly through batch send operations.
     }
 }
 

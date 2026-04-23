@@ -484,9 +484,9 @@ async fn receive_messages_respects_max_count() {
         .await
         .expect("batch receive must succeed");
 
-    assert!(
-        received.len() <= 4,
-        "must not exceed requested max_messages"
+    assert_eq!(
+        received.len(),
+        4,
+        "must return exactly the requested number of messages when sufficient messages are queued"
     );
-    assert!(!received.is_empty(), "must receive at least one message");
 }

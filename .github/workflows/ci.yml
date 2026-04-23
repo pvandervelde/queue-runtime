@@ -28,8 +28,11 @@ jobs:
           tool: cargo-llvm-cov@0.6.23
 
       - name: Generate code coverage
-        run: cargo llvm-cov --all-features --workspace --codecov --output-path
-          codecov.json
+        run: cargo llvm-cov --workspace --codecov --output-path codecov.json
+        # Note: --all-features is intentionally omitted.  The only declared feature
+        # is `integration-tests = []` which gates integration test binaries that
+        # require Docker.  Enabling it here would cause the coverage job to spin up
+        # NATS/RabbitMQ containers; those are run in the dedicated integration_tests job.
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7 # v5
         with:

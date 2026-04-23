@@ -14,7 +14,9 @@ fuzz_target!(|data: &[u8]| {
         // Either Ok or Err is acceptable; a panic is not.
         let _ = QueueName::new(s.to_string());
     }
-    // Non-UTF-8 input: also must not panic.
+    // For non-UTF-8 input the lossy conversion replaces invalid sequences with
+    // U+FFFD, which is non-ASCII and will always be rejected by QueueName.
+    // We still call it to confirm the rejection path does not panic.
     let lossy = String::from_utf8_lossy(data).into_owned();
     let _ = QueueName::new(lossy);
 });

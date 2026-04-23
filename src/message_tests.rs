@@ -450,7 +450,7 @@ mod property_tests {
         /// Any string longer than 128 characters must be rejected by SessionId.
         #[test]
         fn session_id_rejects_strings_over_128_chars(
-            base in "[a-zA-Z0-9 ]{1,50}",
+            base in "[a-zA-Z0-9]{1,50}",
             extra in "[a-zA-Z0-9]{79,200}",
         ) {
             let long = format!("{}{}", base, extra);

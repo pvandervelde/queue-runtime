@@ -210,6 +210,10 @@ async fn nats_abandon_requeues_message() {
         .expect("message must be redelivered after abandon");
 
     assert_eq!(second.body, first.body, "redelivered body must match");
+    assert_eq!(
+        second.delivery_count, 2,
+        "delivery_count must increment to 2 on redeliver"
+    );
 }
 
 // ============================================================================
