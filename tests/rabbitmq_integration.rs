@@ -9,14 +9,14 @@
 use bytes::Bytes;
 use chrono::Duration;
 use queue_runtime::{
-    client::{QueueProvider, SessionProvider},
+    client::QueueProvider,
     message::{Message, QueueName, SessionId},
     providers::RabbitMqProvider,
     RabbitMqConfig,
 };
-use std::sync::OnceLock;
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::rabbitmq::RabbitMq;
+use tokio::sync::OnceCell;
 
 // ============================================================================
 // Shared container — started once for the whole test binary
@@ -24,21 +24,16 @@ use testcontainers_modules::rabbitmq::RabbitMq;
 
 /// Returns the host port of the single RabbitMQ container shared across all tests.
 ///
-/// [`OnceLock`] ensures the container is started at most once even when
-/// `cargo test` runs tests across multiple threads.  A dedicated
-/// single-threaded Tokio runtime handles the async startup so we do not
-/// re-enter the per-test runtime.  The [`ContainerAsync`] handle is
-/// intentionally leaked: the container must remain running for the entire
-/// process lifetime.
-static RABBITMQ_PORT: OnceLock<u16> = OnceLock::new();
+/// [`OnceCell`] provides async-safe one-time initialization.  Because every
+/// test is already running inside a `#[tokio::test]` runtime, we cannot use
+/// `std::sync::OnceLock` + `block_on` — that would panic with "Cannot start a
+/// runtime from within a runtime".  The [`ContainerAsync`] handle is
+/// intentionally leaked so the broker stays alive for the whole process.
+static RABBITMQ_PORT: OnceCell<u16> = OnceCell::const_new();
 
-fn rabbitmq_port() -> u16 {
-    *RABBITMQ_PORT.get_or_init(|| {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("build temp runtime for RabbitMQ container startup");
-        rt.block_on(async {
+async fn rabbitmq_port() -> u16 {
+    *RABBITMQ_PORT
+        .get_or_init(|| async {
             let container = RabbitMq::default()
                 .start()
                 .await
@@ -47,7 +42,7 @@ fn rabbitmq_port() -> u16 {
             Box::leak(Box::new(container));
             port
         })
-    })
+        .await
 }
 
 // ============================================================================
@@ -95,7 +90,7 @@ async fn rabbitmq_provider(port: u16) -> RabbitMqProvider {
 
 #[tokio::test]
 async fn rabbitmq_send_and_receive_single_message() {
-    let p = rabbitmq_provider(rabbitmq_port()).await;
+    let p = rabbitmq_provider(rabbitmq_port().await).await;
     let q = queue("rmq-send-receive");
 
     let body = "rabbitmq integration payload";
@@ -118,7 +113,7 @@ async fn rabbitmq_send_and_receive_single_message() {
 
 #[tokio::test]
 async fn rabbitmq_attributes_survive_round_trip() {
-    let p = rabbitmq_provider(rabbitmq_port()).await;
+    let p = rabbitmq_provider(rabbitmq_port().await).await;
     let q = queue("rmq-attr-rt");
 
     p.send_message(&q, &msg_with_attrs("body", "event-type", "pull-request"))
@@ -143,7 +138,7 @@ async fn rabbitmq_attributes_survive_round_trip() {
 
 #[tokio::test]
 async fn rabbitmq_correlation_id_survives_round_trip() {
-    let p = rabbitmq_provider(rabbitmq_port()).await;
+    let p = rabbitmq_provider(rabbitmq_port().await).await;
     let q = queue("rmq-corr-id");
 
     let mut message = msg("body");
@@ -170,7 +165,7 @@ async fn rabbitmq_correlation_id_survives_round_trip() {
 
 #[tokio::test]
 async fn rabbitmq_receive_from_empty_queue_returns_none() {
-    let p = rabbitmq_provider(rabbitmq_port()).await;
+    let p = rabbitmq_provider(rabbitmq_port().await).await;
     let q = queue("rmq-empty");
 
     let result = p
@@ -187,7 +182,7 @@ async fn rabbitmq_receive_from_empty_queue_returns_none() {
 
 #[tokio::test]
 async fn rabbitmq_complete_removes_message() {
-    let p = rabbitmq_provider(rabbitmq_port()).await;
+    let p = rabbitmq_provider(rabbitmq_port().await).await;
     let q = queue("rmq-complete");
 
     p.send_message(&q, &msg("ack-me")).await.unwrap();
@@ -212,7 +207,7 @@ async fn rabbitmq_complete_removes_message() {
 
 #[tokio::test]
 async fn rabbitmq_abandon_requeues_message() {
-    let p = rabbitmq_provider(rabbitmq_port()).await;
+    let p = rabbitmq_provider(rabbitmq_port().await).await;
     let q = queue("rmq-abandon");
 
     p.send_message(&q, &msg("nack-me")).await.unwrap();
@@ -242,7 +237,7 @@ async fn rabbitmq_abandon_requeues_message() {
 
 #[tokio::test]
 async fn rabbitmq_session_delivers_in_fifo_order() {
-    let p = rabbitmq_provider(rabbitmq_port()).await;
+    let p = rabbitmq_provider(rabbitmq_port().await).await;
     let q = queue("rmq-session-fifo");
     let sid = "order-session";
 
@@ -288,7 +283,7 @@ async fn rabbitmq_session_delivers_in_fifo_order() {
 
 #[tokio::test]
 async fn rabbitmq_batch_send_returns_one_id_per_message() {
-    let p = rabbitmq_provider(rabbitmq_port()).await;
+    let p = rabbitmq_provider(rabbitmq_port().await).await;
     let q = queue("rmq-batch");
 
     let messages = vec![msg("x"), msg("y"), msg("z")];
@@ -307,7 +302,7 @@ async fn rabbitmq_batch_send_returns_one_id_per_message() {
 
 #[tokio::test]
 async fn rabbitmq_receive_messages_respects_max_count() {
-    let p = rabbitmq_provider(rabbitmq_port()).await;
+    let p = rabbitmq_provider(rabbitmq_port().await).await;
     let q = queue("rmq-batch-receive");
 
     for i in 0..10 {

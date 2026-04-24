@@ -9,15 +9,15 @@
 use bytes::Bytes;
 use chrono::Duration;
 use queue_runtime::{
-    client::{QueueProvider, SessionProvider},
+    client::QueueProvider,
     message::{Message, QueueName, SessionId},
     providers::NatsProvider,
     NatsConfig,
 };
-use std::sync::OnceLock;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::ImageExt;
 use testcontainers_modules::nats::Nats;
+use tokio::sync::OnceCell;
 
 // ============================================================================
 // Shared container — started once for the whole test binary
@@ -25,21 +25,16 @@ use testcontainers_modules::nats::Nats;
 
 /// Returns the host port of the single NATS container shared across all tests.
 ///
-/// [`OnceLock`] ensures the container is started at most once even when
-/// `cargo test` runs tests across multiple threads.  A dedicated
-/// single-threaded Tokio runtime handles the async startup so we do not
-/// re-enter the per-test runtime.  The [`ContainerAsync`] handle is
-/// intentionally leaked: the container must remain running for the entire
-/// process lifetime.
-static NATS_PORT: OnceLock<u16> = OnceLock::new();
+/// [`OnceCell`] provides async-safe one-time initialization.  Because every
+/// test is already running inside a `#[tokio::test]` runtime, we cannot use
+/// `std::sync::OnceLock` + `block_on` — that would panic with "Cannot start a
+/// runtime from within a runtime".  The [`ContainerAsync`] handle is
+/// intentionally leaked so the broker stays alive for the whole process.
+static NATS_PORT: OnceCell<u16> = OnceCell::const_new();
 
-fn nats_port() -> u16 {
-    *NATS_PORT.get_or_init(|| {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("build temp runtime for NATS container startup");
-        rt.block_on(async {
+async fn nats_port() -> u16 {
+    *NATS_PORT
+        .get_or_init(|| async {
             let container = Nats::default()
                 .with_cmd(["-js"]) // enable JetStream
                 .start()
@@ -49,7 +44,7 @@ fn nats_port() -> u16 {
             Box::leak(Box::new(container));
             port
         })
-    })
+        .await
 }
 
 // ============================================================================
@@ -97,7 +92,7 @@ async fn nats_provider(port: u16) -> NatsProvider {
 
 #[tokio::test]
 async fn nats_send_and_receive_single_message() {
-    let p = nats_provider(nats_port()).await;
+    let p = nats_provider(nats_port().await).await;
     let q = queue("nats-send-receive");
 
     let body = "nats integration payload";
@@ -120,7 +115,7 @@ async fn nats_send_and_receive_single_message() {
 
 #[tokio::test]
 async fn nats_attributes_survive_round_trip() {
-    let p = nats_provider(nats_port()).await;
+    let p = nats_provider(nats_port().await).await;
     let q = queue("nats-attr-rt");
 
     p.send_message(&q, &msg_with_attrs("body", "event-type", "push"))
@@ -145,7 +140,7 @@ async fn nats_attributes_survive_round_trip() {
 
 #[tokio::test]
 async fn nats_receive_from_empty_queue_returns_none() {
-    let p = nats_provider(nats_port()).await;
+    let p = nats_provider(nats_port().await).await;
     let q = queue("nats-empty");
 
     let result = p
@@ -162,7 +157,7 @@ async fn nats_receive_from_empty_queue_returns_none() {
 
 #[tokio::test]
 async fn nats_complete_removes_message() {
-    let p = nats_provider(nats_port()).await;
+    let p = nats_provider(nats_port().await).await;
     let q = queue("nats-complete");
 
     p.send_message(&q, &msg("complete-me")).await.unwrap();
@@ -187,7 +182,7 @@ async fn nats_complete_removes_message() {
 
 #[tokio::test]
 async fn nats_abandon_requeues_message() {
-    let p = nats_provider(nats_port()).await;
+    let p = nats_provider(nats_port().await).await;
     let q = queue("nats-abandon");
 
     p.send_message(&q, &msg("retry-me")).await.unwrap();
@@ -221,7 +216,7 @@ async fn nats_abandon_requeues_message() {
 
 #[tokio::test]
 async fn nats_session_delivers_in_fifo_order() {
-    let p = nats_provider(nats_port()).await;
+    let p = nats_provider(nats_port().await).await;
     let q = queue("nats-session-fifo");
     let sid = "order-session";
 
@@ -267,7 +262,7 @@ async fn nats_session_delivers_in_fifo_order() {
 
 #[tokio::test]
 async fn nats_batch_send_returns_one_id_per_message() {
-    let p = nats_provider(nats_port()).await;
+    let p = nats_provider(nats_port().await).await;
     let q = queue("nats-batch");
 
     let messages = vec![msg("x"), msg("y"), msg("z")];
