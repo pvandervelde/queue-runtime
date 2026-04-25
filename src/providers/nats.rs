@@ -248,6 +248,21 @@ fn stream_name(config: &NatsConfig, queue: &QueueName) -> String {
     )
 }
 
+/// Build a stable durable consumer name for a queue.
+///
+/// Using a named durable consumer (rather than an ephemeral one) means that
+/// `Info::delivered` increments across successive `receive_message` calls,
+/// even when each call creates a fresh handle to the server-side consumer.
+/// With ephemeral consumers the server issues a new consumer-sequence on each
+/// call, and `num_delivered` is always 1 from the new consumer's perspective.
+fn consumer_name(config: &NatsConfig, queue: &QueueName) -> String {
+    format!(
+        "{}-{}-consumer",
+        nats_safe(&config.stream_prefix),
+        nats_safe(queue.as_str())
+    )
+}
+
 /// Build the dead-letter subject for a queue if DLQ is enabled.
 fn dead_letter_subject(config: &NatsConfig, queue: &QueueName) -> Option<String> {
     if !config.enable_dead_letter {
@@ -395,7 +410,8 @@ impl NatsProvider {
         queue: &QueueName,
         filter_subject: &str,
     ) -> Result<async_nats::jetstream::consumer::Consumer<ConsumerConfig>, QueueError> {
-        let name = stream_name(&self.config, queue);
+        let stream_name = stream_name(&self.config, queue);
+        let consumer_name = consumer_name(&self.config, queue);
         let ack_wait_std = self
             .config
             .ack_wait
@@ -403,6 +419,8 @@ impl NatsProvider {
             .unwrap_or(std::time::Duration::from_secs(30));
 
         let consumer_config = ConsumerConfig {
+            name: Some(consumer_name.clone()),
+            durable_name: Some(consumer_name.clone()),
             filter_subject: filter_subject.to_string(),
             ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
             ack_wait: ack_wait_std,
@@ -410,23 +428,27 @@ impl NatsProvider {
             ..Default::default()
         };
 
-        let stream =
-            self.jetstream
-                .get_stream(&name)
-                .await
-                .map_err(|e| QueueError::ProviderError {
-                    provider: "nats".to_string(),
-                    code: "STREAM_GET_FAILED".to_string(),
-                    message: format!("failed to get stream '{}': {}", name, e),
-                })?;
+        let stream = self
+            .jetstream
+            .get_stream(&stream_name)
+            .await
+            .map_err(|e| QueueError::ProviderError {
+                provider: "nats".to_string(),
+                code: "STREAM_GET_FAILED".to_string(),
+                message: format!("failed to get stream '{}': {}", stream_name, e),
+            })?;
 
-        let consumer = stream.create_consumer(consumer_config).await.map_err(|e| {
-            QueueError::ProviderError {
+        let consumer = stream
+            .get_or_create_consumer(&consumer_name, consumer_config)
+            .await
+            .map_err(|e| QueueError::ProviderError {
                 provider: "nats".to_string(),
                 code: "CONSUMER_CREATE_FAILED".to_string(),
-                message: format!("failed to create pull consumer on '{}': {}", name, e),
-            }
-        })?;
+                message: format!(
+                    "failed to get or create pull consumer on '{}': {}",
+                    stream_name, e
+                ),
+            })?;
 
         Ok(consumer)
     }

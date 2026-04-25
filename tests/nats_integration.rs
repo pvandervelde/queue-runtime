@@ -172,15 +172,6 @@ async fn nats_complete_removes_message() {
         .await
         .expect("complete must succeed");
 
-    // The NatsProvider creates an ephemeral pull consumer for every
-    // receive_message call.  The Rust handle is dropped when receive_message
-    // returns, but the NATS server keeps the server-side consumer alive until
-    // its inactive_threshold expires (default 5 s).  A WorkQueue stream rejects
-    // a second consumer with an overlapping filter subject while the first is
-    // still active (JetStream error 10100).  Wait long enough for the server to
-    // garbage-collect the previous consumer before creating a new one.
-    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
-
     let recheck = p.receive_message(&q, Duration::seconds(2)).await.unwrap();
     assert!(recheck.is_none(), "completed message must not reappear");
 }
@@ -205,10 +196,6 @@ async fn nats_abandon_requeues_message() {
     p.abandon_message(&first.receipt_handle)
         .await
         .expect("abandon must succeed");
-
-    // Wait for the server to garbage-collect the previous ephemeral consumer
-    // before creating a new one.  See comment in nats_complete_removes_message.
-    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
 
     let second = p
         .receive_message(&q, Duration::seconds(10))

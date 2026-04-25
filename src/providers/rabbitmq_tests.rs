@@ -308,6 +308,25 @@ mod header_tests {
         assert_eq!(count, 2, "redelivered with no header must be 2");
     }
 
+    /// Verify that `x-delivery-count` header takes precedence over the redelivered flag.
+    ///
+    /// On Quorum Queues both fields are set simultaneously; the header provides the
+    /// precise count and must win over the boolean fallback.
+    #[test]
+    fn test_delivery_count_header_takes_precedence_over_redelivered_flag() {
+        let mut headers = FieldTable::default();
+        headers.insert(
+            lapin::types::ShortString::from("x-delivery-count"),
+            lapin::types::AMQPValue::LongLongInt(4),
+        );
+        // Quorum Queue scenario: both header and redelivered flag are set.
+        let count = RabbitMqProvider::extract_delivery_count(&Some(headers), true);
+        assert_eq!(
+            count, 5,
+            "x-delivery-count header must take precedence over redelivered flag"
+        );
+    }
+
     /// Verify that TTL of zero does not set an expiration property.
     #[test]
     fn test_zero_ttl_not_encoded() {
