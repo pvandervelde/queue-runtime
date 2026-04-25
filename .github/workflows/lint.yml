@@ -63,10 +63,12 @@ jobs:
       - name: Check semver
         uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2
         with:
-          # Compare against the merge base so this works before the crate is
-          # published to crates.io.  Once published, remove baseline-rev and
-          # the action will compare against the crates.io baseline instead.
-          baseline-rev: master
+          # Use the remote-tracking ref (origin/master) rather than a local
+          # branch name.  In a PR checkout the workspace is in detached-HEAD
+          # mode; the local 'master' branch does not exist, so git can't
+          # resolve 'master^{tree}'.  'origin/master' is always present after
+          # the full-depth fetch above.
+          baseline-rev: origin/master
 
   cargo-deny:
     runs-on: ubuntu-latest
