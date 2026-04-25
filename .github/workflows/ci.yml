@@ -106,9 +106,12 @@ jobs:
 
       - name: Run ${{ matrix.provider }} integration tests
         run: cargo test --test ${{ matrix.provider }}_integration --features
-          integration-tests
+          integration-tests -- --test-threads=1
         env:
           # Testcontainers uses Docker daemon available on ubuntu-latest
+          # --test-threads=1 serializes test execution to avoid NATS JetStream
+          # WorkQueue consumer conflicts when concurrently creating consumers on
+          # the same stream from multiple tokio::test instances.
           TESTCONTAINERS_RYUK_DISABLED: "true"
 
   fuzz_tests:

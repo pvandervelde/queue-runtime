@@ -229,11 +229,11 @@ async fn rabbitmq_abandon_requeues_message() {
         .expect("message must be redelivered after abandon");
 
     assert_eq!(second.body, first.body, "redelivered body must match");
+    assert_eq!(
+        second.delivery_count, 2,
+        "delivery_count must increment to 2 on redeliver"
+    );
 }
-
-// ============================================================================
-// Assertion 7: Session FIFO ordering (emulated via per-session sub-queues)
-// ============================================================================
 
 #[tokio::test]
 async fn rabbitmq_session_delivers_in_fifo_order() {
@@ -316,6 +316,9 @@ async fn rabbitmq_receive_messages_respects_max_count() {
         .await
         .expect("batch receive must succeed");
 
-    assert!(!received.is_empty(), "must receive at least one message");
-    assert!(received.len() <= 4, "must not exceed requested max count");
+    assert_eq!(
+        received.len(),
+        4,
+        "must return exactly the requested number of messages when sufficient messages are queued"
+    );
 }
