@@ -499,7 +499,11 @@ impl RabbitMqProvider {
                 return (*n as u32).saturating_add(1);
             }
         }
-        if redelivered { 2 } else { 1 }
+        if redelivered {
+            2
+        } else {
+            1
+        }
     }
 
     /// Register a delivery in the in-flight map and return its [`ReceivedMessage`].
