@@ -34,7 +34,7 @@ jobs:
         # require Docker.  Enabling it here would cause the coverage job to spin up
         # NATS/RabbitMQ containers; those are run in the dedicated integration_tests job.
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7 # v5
+        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }} # not required for public repos
           files: codecov.json
