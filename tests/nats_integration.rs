@@ -278,3 +278,54 @@ async fn nats_batch_send_returns_one_id_per_message() {
     strs.dedup();
     assert_eq!(strs.len(), 3, "all batch IDs must be distinct");
 }
+
+// ============================================================================
+// Queue and session consumers coexist on the same queue
+// ============================================================================
+
+/// Regression test: queue-level and session-level consumers must use distinct
+/// durable names so that calling receive_message and create_session_client on
+/// the same queue does not result in a consumer name collision.
+///
+/// Before the fix, both code paths submitted the same durable consumer name to
+/// the NATS server but with different filter subjects, causing the session
+/// consumer to inherit the whole-queue filter and duplicate or miss messages.
+#[tokio::test]
+async fn nats_queue_and_session_consumers_coexist_on_same_queue() {
+    let p = nats_provider(nats_port().await).await;
+    let q = queue("nats-coexist");
+
+    // Send a regular message (no session) and a session message to the same queue.
+    p.send_message(&q, &msg("regular")).await.unwrap();
+    p.send_message(&q, &msg_with_session("session-msg", "coexist-sid"))
+        .await
+        .unwrap();
+
+    // Regular receive must get only the non-session message (no session filter).
+    let received = p
+        .receive_message(&q, Duration::seconds(10))
+        .await
+        .unwrap()
+        .expect("must receive the regular message");
+    assert_eq!(
+        received.body,
+        Bytes::from("regular"),
+        "queue consumer must not pick up session-filtered message"
+    );
+
+    // Session receive must get only the message tagged with the matching session ID.
+    let session = p
+        .create_session_client(&q, Some(SessionId::new("coexist-sid".to_string()).unwrap()))
+        .await
+        .unwrap();
+    let sm = session
+        .receive_message(Duration::seconds(10))
+        .await
+        .unwrap()
+        .expect("session consumer must receive its message");
+    assert_eq!(
+        sm.body,
+        Bytes::from("session-msg"),
+        "session consumer must only deliver the session-tagged message"
+    );
+}

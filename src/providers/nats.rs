@@ -227,9 +227,27 @@ fn queue_subject(config: &NatsConfig, queue: &QueueName) -> String {
     )
 }
 
+/// Sanitise a session ID for use in NATS subject and consumer name identifiers.
+///
+/// NATS subjects use `.` as a wildcard-separator and consumer/stream names must
+/// contain only alphanumeric characters, underscores, or hyphens.  This helper
+/// replaces every character that is not an ASCII alphanumeric or `_` with `_`,
+/// covering all NATS-invalid characters (`.`, `/`, ` `, `*`, `>`, etc.).
+fn nats_safe_session_id(id: &str) -> String {
+    id.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 /// Build the NATS subject for a session within a queue.
 fn session_subject(config: &NatsConfig, queue: &QueueName, session_id: &SessionId) -> String {
-    let safe_session = session_id.as_str().replace(['-', '/', ' '], "_");
+    let safe_session = nats_safe_session_id(session_id.as_str());
     format!(
         "{}.{}.session.{}",
         nats_safe(&config.stream_prefix),
@@ -272,7 +290,7 @@ fn consumer_name(config: &NatsConfig, queue: &QueueName) -> String {
 /// consumer, routing messages through the wrong filter).  Incorporating the
 /// session ID into the name keeps each session consumer independent.
 fn session_consumer_name(config: &NatsConfig, queue: &QueueName, session_id: &SessionId) -> String {
-    let safe_sid = session_id.as_str().replace(['-', '/', ' '], "_");
+    let safe_sid = nats_safe_session_id(session_id.as_str());
     format!(
         "{}-{}-session-{}-consumer",
         nats_safe(&config.stream_prefix),
@@ -452,6 +470,18 @@ impl NatsProvider {
             ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
             ack_wait: ack_wait_std,
             max_deliver: self.config.max_deliver.unwrap_or(-1),
+            // Expire session consumers after twice the session lock duration so
+            // they are cleaned up automatically by the server once a session is
+            // no longer in use.  Without this, named durable consumers accumulate
+            // indefinitely on the server (one per unique session ID).  Queue-level
+            // consumers also benefit: if the process dies, the server reclaims the
+            // consumer slot after the inactive window instead of keeping it forever.
+            inactive_threshold: self
+                .config
+                .session_lock_duration
+                .to_std()
+                .unwrap_or(std::time::Duration::from_secs(300))
+                .saturating_mul(2),
             ..Default::default()
         };
 
