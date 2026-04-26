@@ -27,7 +27,7 @@ uuid = { version = "1.8", features = ["v4", "serde"] }
 chrono = { version = "0.4.30", features = ["serde"] }
 
 # Error handling with derive macros and flexible error types
-thiserror = "1.0.60"
+thiserror = "2.0.18"
 anyhow = "1.0.80"
 
 # Async methods in traits (pre-1.0 but stable interface)
