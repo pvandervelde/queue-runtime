@@ -38,7 +38,7 @@ jobs:
               uses: dtolnay/rust-toolchain@stable
 
             - name: Run release-plz
-              uses: release-plz/action@2d634174257b7f46339e7533865a910743a0c5c9 # v0.5
+              uses: release-plz/action@1528104d2ca23787631a1c1f022abb64b34c1e11 # v0.5
               with:
                   command: release-pr
               env:
