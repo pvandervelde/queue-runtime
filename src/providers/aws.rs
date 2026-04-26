@@ -977,9 +977,21 @@ impl AwsSqsProvider {
                     in_queue_url = true;
                 }
                 Ok(Event::Text(e)) if in_queue_url => {
-                    return e.decode().map(|s| s.into_owned()).map_err(|e| {
-                        AwsError::SerializationError(format!("Failed to parse XML: {}", e))
-                    });
+                    return e
+                        .decode()
+                        .map_err(|e| {
+                            AwsError::SerializationError(format!("Failed to parse XML: {}", e))
+                        })
+                        .and_then(|s| {
+                            quick_xml::escape::unescape(&s)
+                                .map(|u| u.into_owned())
+                                .map_err(|e| {
+                                    AwsError::SerializationError(format!(
+                                        "Failed to unescape XML: {}",
+                                        e
+                                    ))
+                                })
+                        });
                 }
                 Ok(Event::Eof) => break,
                 Err(e) => {
@@ -1023,10 +1035,14 @@ impl AwsSqsProvider {
                 },
                 Ok(Event::Text(e)) => {
                     if in_code {
-                        error_code = e.decode().ok().map(|s| s.into_owned());
+                        error_code = e.decode().ok().and_then(|s| {
+                            quick_xml::escape::unescape(&s).ok().map(|u| u.into_owned())
+                        });
                         in_code = false;
                     } else if in_message {
-                        error_message = e.decode().ok().map(|s| s.into_owned());
+                        error_message = e.decode().ok().and_then(|s| {
+                            quick_xml::escape::unescape(&s).ok().map(|u| u.into_owned())
+                        });
                         in_message = false;
                     }
                 }
@@ -1858,10 +1874,14 @@ impl AwsSessionProvider {
                 },
                 Ok(Event::Text(e)) => {
                     if in_code {
-                        error_code = e.decode().ok().map(|s| s.into_owned());
+                        error_code = e.decode().ok().and_then(|s| {
+                            quick_xml::escape::unescape(&s).ok().map(|u| u.into_owned())
+                        });
                         in_code = false;
                     } else if in_message {
-                        error_message = e.decode().ok().map(|s| s.into_owned());
+                        error_message = e.decode().ok().and_then(|s| {
+                            quick_xml::escape::unescape(&s).ok().map(|u| u.into_owned())
+                        });
                         in_message = false;
                     }
                 }

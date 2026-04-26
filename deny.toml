@@ -67,9 +67,11 @@ feature-depth = 1
 ignore = [
     # paste is unmaintained but required by Azure SDK
     { id = "RUSTSEC-2024-0436", reason = "Transitive dependency from Azure SDK (azure_core). Author archived repo but crate still works." },
-    # rand 0.7.3 is pinned by http-types 2.12.0 (azure_core transitive). The unsoundness
-    # requires a custom logger that calls rand::rng() during reseeding — not a concern here.
-    { id = "RUSTSEC-2026-0097", reason = "Transitive via azure_core -> http-types -> rand 0.7.3. Cannot update without Azure SDK upgrade. Unsoundness requires a custom logger calling rand::rng() during reseeding, which this crate does not do." },
+    # rand 0.7.3 is still pulled in transiently via azure_messaging_servicebus 0.21.0 -> azure_core 0.21.0
+    # -> http-types 2.12.0 -> rand 0.7.3. The direct azure_core dep is now 0.35.0 but the service bus
+    # crate still requires 0.21.0. The unsoundness requires a custom logger that calls rand::rng() during
+    # reseeding — not a concern here. Revisit when azure_messaging_servicebus upgrades past 0.21.
+    { id = "RUSTSEC-2026-0097", reason = "Transitive via azure_messaging_servicebus 0.21.0 -> azure_core 0.21.0 -> http-types -> rand 0.7.3. Unsoundness requires a custom logger calling rand::rng() during reseeding, which this crate does not do." },
     # rustls-pemfile is unmaintained; transitive via testcontainers -> bollard. No safe upgrade exists.
     # Tracked: update testcontainers when a version that drops this dep is released.
     { id = "RUSTSEC-2025-0134", reason = "Transitive dev-dependency via testcontainers 0.23 -> bollard -> rustls-pemfile. No safe upgrade available. Only affects test builds; not shipped in production." },
@@ -99,6 +101,7 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
+    "Zlib",
     "CDLA-Permissive-2.0",
 ]
 # The confidence threshold for detecting a license from license text.

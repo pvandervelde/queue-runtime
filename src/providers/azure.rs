@@ -56,7 +56,8 @@ use async_trait::async_trait;
 use azure_core::credentials::Secret as AzureSecret;
 use azure_core::credentials::TokenCredential;
 use azure_identity::{
-    ClientSecretCredential, ClientSecretCredentialOptions, ManagedIdentityCredential,
+    ClientSecretCredential, ClientSecretCredentialOptions, DeveloperToolsCredential,
+    ManagedIdentityCredential,
 };
 use chrono::{Duration, Utc};
 use reqwest::{header, Client as HttpClient, StatusCode};
@@ -88,6 +89,7 @@ async fn get_bearer_token(
         .get_token(scopes, None)
         .await
         .map_err(|e| AzureError::AuthenticationError(format!("Failed to get token: {}", e)))?;
+    // token is an AccessToken (outer struct); .token is its Secret<String> field; .secret() extracts the raw string.
     Ok(token.token.secret().to_string())
 }
 
@@ -406,10 +408,11 @@ impl AzureServiceBusProvider {
                     )
                 })?;
 
-                // Use ManagedIdentityCredential as default
-                let credential = ManagedIdentityCredential::new(None).map_err(|e| {
+                // Use DeveloperToolsCredential (Azure CLI → azd chain) for local development.
+                // In production workloads, prefer the explicit ManagedIdentity variant.
+                let credential = DeveloperToolsCredential::new(None).map_err(|e| {
                     AzureError::ConfigurationError(format!(
-                        "Failed to create managed identity credential: {}",
+                        "Failed to create developer tools credential: {}",
                         e
                     ))
                 })?;
