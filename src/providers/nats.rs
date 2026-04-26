@@ -263,6 +263,24 @@ fn consumer_name(config: &NatsConfig, queue: &QueueName) -> String {
     )
 }
 
+/// Build a stable durable consumer name for a session consumer.
+///
+/// Session consumers must have a name that is distinct from the queue-level
+/// consumer returned by [`consumer_name`].  NATS enforces config consistency
+/// on named durable consumers: if the same name is submitted with a different
+/// `filter_subject` the server returns an error (or silently reuses the old
+/// consumer, routing messages through the wrong filter).  Incorporating the
+/// session ID into the name keeps each session consumer independent.
+fn session_consumer_name(config: &NatsConfig, queue: &QueueName, session_id: &SessionId) -> String {
+    let safe_sid = session_id.as_str().replace(['-', '/', ' '], "_");
+    format!(
+        "{}-{}-session-{}-consumer",
+        nats_safe(&config.stream_prefix),
+        nats_safe(queue.as_str()),
+        safe_sid
+    )
+}
+
 /// Build the dead-letter subject for a queue if DLQ is enabled.
 fn dead_letter_subject(config: &NatsConfig, queue: &QueueName) -> Option<String> {
     if !config.enable_dead_letter {
@@ -404,14 +422,23 @@ impl NatsProvider {
         Ok(())
     }
 
-    /// Create an ephemeral pull consumer for the given subject filter.
+    /// Create or retrieve a named durable pull consumer for the given subject filter.
+    ///
+    /// Using named durable consumers means the server tracks delivery count across
+    /// successive `receive_message` calls (each call reuses the same server-side
+    /// consumer, so `Info::delivered` increments correctly on redelivery).
+    ///
+    /// The `name` parameter must be unique per `filter_subject`.  Queue-level
+    /// consumers and per-session consumers must use distinct names (see
+    /// [`consumer_name`] and [`session_consumer_name`]) to avoid the NATS server
+    /// rejecting a name reuse with a different filter.
     async fn create_consumer(
         &self,
         queue: &QueueName,
+        name: &str,
         filter_subject: &str,
     ) -> Result<async_nats::jetstream::consumer::Consumer<ConsumerConfig>, QueueError> {
         let stream_name = stream_name(&self.config, queue);
-        let consumer_name = consumer_name(&self.config, queue);
         let ack_wait_std = self
             .config
             .ack_wait
@@ -419,8 +446,8 @@ impl NatsProvider {
             .unwrap_or(std::time::Duration::from_secs(30));
 
         let consumer_config = ConsumerConfig {
-            name: Some(consumer_name.clone()),
-            durable_name: Some(consumer_name.clone()),
+            name: Some(name.to_string()),
+            durable_name: Some(name.to_string()),
             filter_subject: filter_subject.to_string(),
             ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
             ack_wait: ack_wait_std,
@@ -428,18 +455,16 @@ impl NatsProvider {
             ..Default::default()
         };
 
-        let stream = self
-            .jetstream
-            .get_stream(&stream_name)
-            .await
-            .map_err(|e| QueueError::ProviderError {
+        let stream = self.jetstream.get_stream(&stream_name).await.map_err(|e| {
+            QueueError::ProviderError {
                 provider: "nats".to_string(),
                 code: "STREAM_GET_FAILED".to_string(),
                 message: format!("failed to get stream '{}': {}", stream_name, e),
-            })?;
+            }
+        })?;
 
         let consumer = stream
-            .get_or_create_consumer(&consumer_name, consumer_config)
+            .get_or_create_consumer(name, consumer_config)
             .await
             .map_err(|e| QueueError::ProviderError {
                 provider: "nats".to_string(),
@@ -641,7 +666,8 @@ impl QueueProvider for NatsProvider {
         self.ensure_stream(queue).await?;
 
         let subject = queue_subject(&self.config, queue);
-        let consumer = self.create_consumer(queue, &subject).await?;
+        let name = consumer_name(&self.config, queue);
+        let consumer = self.create_consumer(queue, &name, &subject).await?;
 
         let timeout_std = timeout
             .to_std()
@@ -683,7 +709,8 @@ impl QueueProvider for NatsProvider {
         self.ensure_stream(queue).await?;
 
         let subject = queue_subject(&self.config, queue);
-        let consumer = self.create_consumer(queue, &subject).await?;
+        let name = consumer_name(&self.config, queue);
+        let consumer = self.create_consumer(queue, &name, &subject).await?;
 
         let timeout_std = timeout
             .to_std()
@@ -907,7 +934,8 @@ impl QueueProvider for NatsProvider {
         self.ensure_stream(queue).await?;
 
         let subject = session_subject(&self.config, queue, &sid);
-        let consumer = self.create_consumer(queue, &subject).await?;
+        let name = session_consumer_name(&self.config, queue, &sid);
+        let consumer = self.create_consumer(queue, &name, &subject).await?;
 
         let now = Timestamp::now();
         let lock_expires_at =
