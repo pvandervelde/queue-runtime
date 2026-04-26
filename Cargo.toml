@@ -14,24 +14,24 @@ readme = "README.md"
 
 [dependencies]
 # Core async runtime with full features for concurrent message processing
-tokio = { version = "1.40", features = ["full"] }
+tokio = { version = "1.52.1", features = ["full"] }
 # Structured logging and tracing
-tracing = "0.1.40"
+tracing = "0.1.44"
 # Serialization framework with derive macros for message types
-serde = { version = "1.0.200", features = ["derive"] }
-serde_json = "1.0.120"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
 # UUID generation for message identifiers
 uuid = { version = "1.8", features = ["v4", "serde"] }
 
 # Date/time handling for message timestamps
-chrono = { version = "0.4.30", features = ["serde"] }
+chrono = { version = "0.4.44", features = ["serde"] }
 
 # Error handling with derive macros and flexible error types
 thiserror = "1.0.60"
 anyhow = "1.0.80"
 
 # Async methods in traits (pre-1.0 but stable interface)
-async-trait = "0.1"
+async-trait = "0.1.89"
 
 # HTTP client for API interactions
 reqwest = { version = "0.12.28", features = ["json"] }
