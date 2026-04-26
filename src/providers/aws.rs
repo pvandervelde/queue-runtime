@@ -220,7 +220,7 @@ use crate::message::{
 use crate::provider::{AwsSqsConfig, ProviderType, SessionSupport};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use reqwest::Client as HttpClient;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -404,7 +404,7 @@ impl AwsV4Signer {
         let signed_headers = "host;x-amz-date";
 
         // Payload hash
-        let payload_hash = format!("{:x}", Sha256::digest(body.as_bytes()));
+        let payload_hash = hex::encode(Sha256::digest(body.as_bytes()));
 
         // Build canonical request
         let canonical_request = format!(
@@ -423,7 +423,7 @@ impl AwsV4Signer {
             "{}/{}/{}/aws4_request",
             date_stamp, self.region, self.service
         );
-        let canonical_request_hash = format!("{:x}", Sha256::digest(canonical_request.as_bytes()));
+        let canonical_request_hash = hex::encode(Sha256::digest(canonical_request.as_bytes()));
 
         let string_to_sign = format!(
             "{}\n{}\n{}\n{}",
@@ -966,7 +966,7 @@ impl AwsSqsProvider {
         use quick_xml::Reader;
 
         let mut reader = Reader::from_str(xml);
-        reader.trim_text(true);
+        reader.config_mut().trim_text(true);
 
         let mut in_queue_url = false;
         let mut buf = Vec::new();
@@ -977,9 +977,21 @@ impl AwsSqsProvider {
                     in_queue_url = true;
                 }
                 Ok(Event::Text(e)) if in_queue_url => {
-                    return e.unescape().map(|s| s.into_owned()).map_err(|e| {
-                        AwsError::SerializationError(format!("Failed to parse XML: {}", e))
-                    });
+                    return e
+                        .decode()
+                        .map_err(|e| {
+                            AwsError::SerializationError(format!("Failed to parse XML: {}", e))
+                        })
+                        .and_then(|s| {
+                            quick_xml::escape::unescape(&s)
+                                .map(|u| u.into_owned())
+                                .map_err(|e| {
+                                    AwsError::SerializationError(format!(
+                                        "Failed to unescape XML: {}",
+                                        e
+                                    ))
+                                })
+                        });
                 }
                 Ok(Event::Eof) => break,
                 Err(e) => {
@@ -1004,7 +1016,7 @@ impl AwsSqsProvider {
         use quick_xml::Reader;
 
         let mut reader = Reader::from_str(xml);
-        reader.trim_text(true);
+        reader.config_mut().trim_text(true);
 
         let mut error_code = None;
         let mut error_message = None;
@@ -1023,10 +1035,14 @@ impl AwsSqsProvider {
                 },
                 Ok(Event::Text(e)) => {
                     if in_code {
-                        error_code = e.unescape().ok().map(|s| s.into_owned());
+                        error_code = e.decode().ok().and_then(|s| {
+                            quick_xml::escape::unescape(&s).ok().map(|u| u.into_owned())
+                        });
                         in_code = false;
                     } else if in_message {
-                        error_message = e.unescape().ok().map(|s| s.into_owned());
+                        error_message = e.decode().ok().and_then(|s| {
+                            quick_xml::escape::unescape(&s).ok().map(|u| u.into_owned())
+                        });
                         in_message = false;
                     }
                 }
@@ -1066,7 +1082,7 @@ impl AwsSqsProvider {
         use quick_xml::Reader;
 
         let mut reader = Reader::from_str(xml);
-        reader.trim_text(true);
+        reader.config_mut().trim_text(true);
 
         let mut in_message_id = false;
         let mut buf = Vec::new();
@@ -1077,7 +1093,7 @@ impl AwsSqsProvider {
                     in_message_id = true;
                 }
                 Ok(Event::Text(e)) if in_message_id => {
-                    let msg_id = e.unescape().map(|s| s.into_owned()).map_err(|e| {
+                    let msg_id = e.decode().map(|s| s.into_owned()).map_err(|e| {
                         AwsError::SerializationError(format!("Failed to parse XML: {}", e))
                     })?;
 
@@ -1114,7 +1130,7 @@ impl AwsSqsProvider {
         use quick_xml::Reader;
 
         let mut reader = Reader::from_str(xml);
-        reader.trim_text(true);
+        reader.config_mut().trim_text(true);
 
         let mut messages = Vec::new();
         let mut in_message = false;
@@ -1153,7 +1169,7 @@ impl AwsSqsProvider {
                     _ => {}
                 },
                 Ok(Event::Text(e)) => {
-                    let text = e.unescape().ok().map(|s| s.into_owned());
+                    let text = e.decode().ok().map(|s| s.into_owned());
                     if in_message_id {
                         current_message_id = text;
                         in_message_id = false;
@@ -1172,7 +1188,8 @@ impl AwsSqsProvider {
                                 "MessageGroupId" => current_session_id = text,
                                 "ApproximateReceiveCount" => {
                                     if let Some(count_str) = text {
-                                        current_delivery_count = count_str.parse().unwrap_or(1);
+                                        current_delivery_count =
+                                            count_str.parse::<u32>().unwrap_or(1);
                                     }
                                 }
                                 _ => {}
@@ -1624,7 +1641,7 @@ impl AwsSqsProvider {
                 if let Some(ref session_id) = message.session_id {
                     hasher.update(session_id.as_str().as_bytes());
                 }
-                let hash = format!("{:x}", hasher.finalize());
+                let hash = hex::encode(hasher.finalize());
                 params.insert(
                     format!(
                         "SendMessageBatchRequestEntry.{}.MessageDeduplicationId",
@@ -1652,7 +1669,7 @@ impl AwsSqsProvider {
         use quick_xml::Reader;
 
         let mut reader = Reader::from_str(xml);
-        reader.trim_text(true);
+        reader.config_mut().trim_text(true);
 
         let mut message_ids = Vec::new();
         let mut in_successful = false;
@@ -1667,7 +1684,7 @@ impl AwsSqsProvider {
                     _ => {}
                 },
                 Ok(Event::Text(e)) if in_message_id => {
-                    let msg_id = e.unescape().map(|s| s.into_owned()).map_err(|e| {
+                    let msg_id = e.decode().map(|s| s.into_owned()).map_err(|e| {
                         AwsError::SerializationError(format!("Failed to parse XML: {}", e))
                     })?;
 
@@ -1838,7 +1855,7 @@ impl AwsSessionProvider {
         use quick_xml::Reader;
 
         let mut reader = Reader::from_str(xml);
-        reader.trim_text(true);
+        reader.config_mut().trim_text(true);
 
         let mut error_code = None;
         let mut error_message = None;
@@ -1857,10 +1874,14 @@ impl AwsSessionProvider {
                 },
                 Ok(Event::Text(e)) => {
                     if in_code {
-                        error_code = e.unescape().ok().map(|s| s.into_owned());
+                        error_code = e.decode().ok().and_then(|s| {
+                            quick_xml::escape::unescape(&s).ok().map(|u| u.into_owned())
+                        });
                         in_code = false;
                     } else if in_message {
-                        error_message = e.unescape().ok().map(|s| s.into_owned());
+                        error_message = e.decode().ok().and_then(|s| {
+                            quick_xml::escape::unescape(&s).ok().map(|u| u.into_owned())
+                        });
                         in_message = false;
                     }
                 }
@@ -1910,7 +1931,7 @@ impl AwsSessionProvider {
         use quick_xml::Reader;
 
         let mut reader = Reader::from_str(xml);
-        reader.trim_text(true);
+        reader.config_mut().trim_text(true);
 
         let mut messages = Vec::new();
         let mut in_message = false;
@@ -1948,7 +1969,7 @@ impl AwsSessionProvider {
                     _ => {}
                 },
                 Ok(Event::Text(e)) => {
-                    let text = e.unescape().ok().map(|s| s.into_owned());
+                    let text = e.decode().ok().map(|s| s.into_owned());
                     if in_message_id {
                         current_message_id = text;
                         in_message_id = false;
@@ -1967,7 +1988,8 @@ impl AwsSessionProvider {
                                 "MessageGroupId" => current_session_id = text,
                                 "ApproximateReceiveCount" => {
                                     if let Some(count_str) = text {
-                                        current_delivery_count = count_str.parse().unwrap_or(1);
+                                        current_delivery_count =
+                                            count_str.parse::<u32>().unwrap_or(1);
                                     }
                                 }
                                 _ => {}

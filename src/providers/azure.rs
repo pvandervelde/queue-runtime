@@ -53,9 +53,11 @@ use crate::message::{
 };
 use crate::provider::{AzureServiceBusConfig, ProviderType, SessionSupport};
 use async_trait::async_trait;
-use azure_core::auth::TokenCredential;
+use azure_core::credentials::Secret as AzureSecret;
+use azure_core::credentials::TokenCredential;
 use azure_identity::{
-    ClientSecretCredential, TokenCredentialOptions, VirtualMachineManagedIdentityCredential,
+    ClientSecretCredential, ClientSecretCredentialOptions, DeveloperToolsCredential,
+    ManagedIdentityCredential,
 };
 use chrono::{Duration, Utc};
 use reqwest::{header, Client as HttpClient, StatusCode};
@@ -84,9 +86,10 @@ async fn get_bearer_token(
 ) -> Result<String, AzureError> {
     let scopes = &["https://servicebus.azure.net/.default"];
     let token = cred
-        .get_token(scopes)
+        .get_token(scopes, None)
         .await
         .map_err(|e| AzureError::AuthenticationError(format!("Failed to get token: {}", e)))?;
+    // token is an AccessToken (outer struct); .token is its Secret<String> field; .secret() extracts the raw string.
     Ok(token.token.secret().to_string())
 }
 
@@ -125,7 +128,7 @@ fn generate_sas_token(namespace_url: &str, conn_str: &str) -> Result<String, Azu
     let string_to_sign = format!("{}\n{}", urlencoding::encode(namespace_url), expiry);
 
     use base64::{engine::general_purpose::STANDARD, Engine};
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
     type HmacSha256 = Hmac<Sha256>;
 
@@ -359,12 +362,16 @@ impl AzureServiceBusProvider {
                     )
                 })?;
 
-                let credential =
-                    VirtualMachineManagedIdentityCredential::new(TokenCredentialOptions::default());
+                let credential = ManagedIdentityCredential::new(None).map_err(|e| {
+                    AzureError::ConfigurationError(format!(
+                        "Failed to create managed identity credential: {}",
+                        e
+                    ))
+                })?;
                 let namespace_url = format!("https://{}.servicebus.windows.net", namespace);
                 (
                     namespace_url,
-                    Some(Arc::new(credential) as Arc<dyn TokenCredential + Send + Sync>),
+                    Some(credential as Arc<dyn TokenCredential + Send + Sync>),
                 )
             }
             AzureAuthMethod::ClientSecret {
@@ -378,24 +385,20 @@ impl AzureServiceBusProvider {
                     )
                 })?;
 
-                // Create HTTP client for credential
-                let http_client = azure_core::new_http_client();
-                let authority_host = azure_core::Url::parse("https://login.microsoftonline.com")
-                    .map_err(|e| {
-                        AzureError::ConfigurationError(format!("Invalid authority URL: {}", e))
-                    })?;
-
+                // Create ClientSecretCredential with new API
                 let credential = ClientSecretCredential::new(
-                    http_client,
-                    authority_host,
-                    tenant_id.clone(),
+                    tenant_id,
                     client_id.clone(),
-                    client_secret.clone(),
-                );
+                    AzureSecret::from(client_secret.clone()),
+                    None::<ClientSecretCredentialOptions>,
+                )
+                .map_err(|e| {
+                    AzureError::ConfigurationError(format!("Failed to create credential: {}", e))
+                })?;
                 let namespace_url = format!("https://{}.servicebus.windows.net", namespace);
                 (
                     namespace_url,
-                    Some(Arc::new(credential) as Arc<dyn TokenCredential + Send + Sync>),
+                    Some(credential as Arc<dyn TokenCredential + Send + Sync>),
                 )
             }
             AzureAuthMethod::DefaultCredential => {
@@ -405,13 +408,18 @@ impl AzureServiceBusProvider {
                     )
                 })?;
 
-                // Use VirtualMachine ManagedIdentity as default
-                let credential =
-                    VirtualMachineManagedIdentityCredential::new(TokenCredentialOptions::default());
+                // Use DeveloperToolsCredential (Azure CLI → azd chain) for local development.
+                // In production workloads, prefer the explicit ManagedIdentity variant.
+                let credential = DeveloperToolsCredential::new(None).map_err(|e| {
+                    AzureError::ConfigurationError(format!(
+                        "Failed to create developer tools credential: {}",
+                        e
+                    ))
+                })?;
                 let namespace_url = format!("https://{}.servicebus.windows.net", namespace);
                 (
                     namespace_url,
-                    Some(Arc::new(credential) as Arc<dyn TokenCredential + Send + Sync>),
+                    Some(credential as Arc<dyn TokenCredential + Send + Sync>),
                 )
             }
         };

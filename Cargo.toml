@@ -14,58 +14,55 @@ readme = "README.md"
 
 [dependencies]
 # Core async runtime with full features for concurrent message processing
-tokio = { version = "1.40", features = ["full"] }
+tokio = { version = "1.52.1", features = ["full"] }
 # Structured logging and tracing
-tracing = "0.1.40"
+tracing = "0.1.44"
 # Serialization framework with derive macros for message types
-serde = { version = "1.0.200", features = ["derive"] }
-serde_json = "1.0.120"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
 # UUID generation for message identifiers
-uuid = { version = "1.8", features = ["v4", "serde"] }
+uuid = { version = "1.23.1", features = ["v4", "serde"] }
 
 # Date/time handling for message timestamps
-chrono = { version = "0.4.30", features = ["serde"] }
+chrono = { version = "0.4.44", features = ["serde"] }
 
 # Error handling with derive macros and flexible error types
-thiserror = "1.0.60"
-anyhow = "1.0.80"
+thiserror = "2.0.18"
+anyhow = "1.0.102"
 
 # Async methods in traits (pre-1.0 but stable interface)
-async-trait = "0.1"
+async-trait = "0.1.89"
 
 # HTTP client for API interactions
-reqwest = { version = "0.12.28", features = ["json"] }
+reqwest = { version = "0.13.2", features = ["json"] }
 
-# Azure Service Bus SDK (pre-1.0, monitor for breaking changes)
-# Note: 0.21 has minor updates, 0.31+ has significant API breaking changes
-# Staying at 0.20 for stability. Upgrade requires code refactoring.
-# See: breaking changes in auth module, TokenCredentialOptions removed, etc.
-azure_messaging_servicebus = "0.20"
-azure_core = "0.20"
-azure_identity = "0.20"
+# Azure Service Bus SDK
+azure_messaging_servicebus = "0.21.0"
+azure_core = "0.35.0"
+azure_identity = "0.35.0"
 
 # Configuration file loading from multiple formats
-config = "0.14.0"
+config = "0.15.22"
 
 # URL parsing and manipulation
 url = "2.5.8"
 # Efficient byte buffer handling for message payloads
-bytes = "1.11.0"
+bytes = "1.11.1"
 # Base64 encoding for credentials and tokens
 base64 = "0.22.1"
 # URL encoding for query parameters
 urlencoding = "2.1.3"
 # HMAC for message authentication
-hmac = "0.12.1"
+hmac = "0.13.0"
 # SHA-2 hashing for signatures
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 # Hexadecimal encoding/decoding
 hex = "0.4.3"
 # XML parsing for Azure Service Bus messages
-quick-xml = "0.31.0"
+quick-xml = "0.39.2"
 
 # RabbitMQ AMQP 0-9-1 client
-lapin = "4.4.0"
+lapin = "4.5.0"
 
 # NATS messaging client with JetStream support
 async-nats = "0.47.0"
@@ -79,14 +76,17 @@ integration-tests = []
 
 [dev-dependencies]
 # Temporary file creation for tests
-tempfile = "3.24"
+tempfile = "=3.27.0"
 # Tokio testing utilities
-tokio-test = "0.4.5"
+tokio-test = "=0.4.5"
 # Property-based testing
-proptest = "1"
+proptest = "=1.11.0"
 # Container-based integration testing (requires Docker)
-testcontainers = "0.23"
-testcontainers-modules = { version = "0.11", features = ["rabbitmq", "nats"] }
+testcontainers = "=0.23.3"
+testcontainers-modules = { version = "=0.11.6", features = [
+    "rabbitmq",
+    "nats",
+] }
 
 # ============================================================================
 # Integration test binaries (require Docker; gated by integration-tests feature)
