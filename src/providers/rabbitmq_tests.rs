@@ -286,9 +286,45 @@ mod header_tests {
             lapin::types::ShortString::from("x-delivery-count"),
             lapin::types::AMQPValue::LongLongInt(4),
         );
-        let count = RabbitMqProvider::extract_delivery_count(&Some(headers));
-        // 4 in header + 1 = 5
+        let count = RabbitMqProvider::extract_delivery_count(&Some(headers), false);
+        // 4 in header + 1 = 5; the redelivered flag is ignored when the header is present
         assert_eq!(count, 5);
+    }
+
+    /// Verify that delivery count falls back to 1 on first delivery (header absent, not redelivered).
+    #[test]
+    fn test_delivery_count_first_delivery_no_header() {
+        let count = RabbitMqProvider::extract_delivery_count(&None, false);
+        assert_eq!(count, 1, "first delivery with no header must be 1");
+    }
+
+    /// Verify that delivery count falls back to 2 when redelivered flag is set and header is absent.
+    ///
+    /// RabbitMQ Classic Queues do not add `x-delivery-count` on nack+requeue; only
+    /// the AMQP `redelivered` boolean is set.
+    #[test]
+    fn test_delivery_count_redelivered_no_header() {
+        let count = RabbitMqProvider::extract_delivery_count(&None, true);
+        assert_eq!(count, 2, "redelivered with no header must be 2");
+    }
+
+    /// Verify that `x-delivery-count` header takes precedence over the redelivered flag.
+    ///
+    /// On Quorum Queues both fields are set simultaneously; the header provides the
+    /// precise count and must win over the boolean fallback.
+    #[test]
+    fn test_delivery_count_header_takes_precedence_over_redelivered_flag() {
+        let mut headers = FieldTable::default();
+        headers.insert(
+            lapin::types::ShortString::from("x-delivery-count"),
+            lapin::types::AMQPValue::LongLongInt(4),
+        );
+        // Quorum Queue scenario: both header and redelivered flag are set.
+        let count = RabbitMqProvider::extract_delivery_count(&Some(headers), true);
+        assert_eq!(
+            count, 5,
+            "x-delivery-count header must take precedence over redelivered flag"
+        );
     }
 
     /// Verify that TTL of zero does not set an expiration property.

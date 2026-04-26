@@ -181,6 +181,63 @@ mod naming_tests {
             session_subject(&config, &queue, &s2)
         );
     }
+
+    /// Verify that session consumer names use the expected format.
+    #[test]
+    fn test_session_consumer_name_format() {
+        let config = default_config();
+        let queue = QueueName::new("my-queue".to_string()).unwrap();
+        let session = SessionId::new("session-123".to_string()).unwrap();
+        let name = session_consumer_name(&config, &queue, &session);
+        assert_eq!(name, "queue_runtime-my_queue-session-session_123-consumer");
+        // Consumer names must not contain dots.
+        assert!(!name.contains('.'));
+    }
+
+    /// Verify that session consumer names are distinct from queue consumer names.
+    #[test]
+    fn test_session_consumer_name_distinct_from_queue_consumer() {
+        let config = default_config();
+        let queue = QueueName::new("q".to_string()).unwrap();
+        let session = SessionId::new("s".to_string()).unwrap();
+        assert_ne!(
+            consumer_name(&config, &queue),
+            session_consumer_name(&config, &queue, &session),
+            "session and queue consumer names must be distinct on the same queue"
+        );
+    }
+
+    /// Verify that different sessions produce different consumer names.
+    #[test]
+    fn test_different_sessions_different_consumer_names() {
+        let config = default_config();
+        let queue = QueueName::new("my-queue".to_string()).unwrap();
+        let s1 = SessionId::new("session-1".to_string()).unwrap();
+        let s2 = SessionId::new("session-2".to_string()).unwrap();
+        assert_ne!(
+            session_consumer_name(&config, &queue, &s1),
+            session_consumer_name(&config, &queue, &s2),
+            "different sessions must produce distinct consumer names"
+        );
+    }
+
+    /// Verify that dots and other NATS-invalid chars in session IDs are sanitised.
+    #[test]
+    fn test_session_consumer_name_sanitises_dots_and_special_chars() {
+        let config = default_config();
+        let queue = QueueName::new("q".to_string()).unwrap();
+        // Dots appear in GitHub repo names (e.g. "org.name/repo.name")
+        let session = SessionId::new("org.name/repo.name".to_string()).unwrap();
+        let name = session_consumer_name(&config, &queue, &session);
+        assert!(
+            !name.contains('.'),
+            "dots must be replaced in consumer name"
+        );
+        assert!(
+            !name.contains('/'),
+            "slashes must be replaced in consumer name"
+        );
+    }
 }
 
 // ============================================================================

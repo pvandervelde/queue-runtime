@@ -71,8 +71,37 @@ lapin = "4.4.0"
 async-nats = "0.47.0"
 futures = "0.3.32"
 
+[features]
+# Gate integration tests that require Docker (NATS, RabbitMQ brokers).
+# Run with: cargo test --test nats_integration --features integration-tests
+#           cargo test --test rabbitmq_integration --features integration-tests
+integration-tests = []
+
 [dev-dependencies]
 # Temporary file creation for tests
 tempfile = "3.24"
 # Tokio testing utilities
 tokio-test = "0.4.5"
+# Property-based testing
+proptest = "1"
+# Container-based integration testing (requires Docker)
+testcontainers = "0.23"
+testcontainers-modules = { version = "0.11", features = ["rabbitmq", "nats"] }
+
+# ============================================================================
+# Integration test binaries (require Docker; gated by integration-tests feature)
+# ============================================================================
+
+[[test]]
+name = "contract_tests"
+path = "tests/contract_tests.rs"
+
+[[test]]
+name = "nats_integration"
+path = "tests/nats_integration.rs"
+required-features = ["integration-tests"]
+
+[[test]]
+name = "rabbitmq_integration"
+path = "tests/rabbitmq_integration.rs"
+required-features = ["integration-tests"]

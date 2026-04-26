@@ -487,14 +487,23 @@ impl RabbitMqProvider {
         None
     }
 
-    /// Extract the delivery count from AMQP `x-death` / `x-delivery-count` headers.
-    fn extract_delivery_count(headers: &Option<FieldTable>) -> u32 {
+    /// Extract the delivery count from AMQP `x-delivery-count` headers.
+    ///
+    /// RabbitMQ Classic Queues do not set `x-delivery-count` on nack+requeue;
+    /// they only set the `redelivered` flag in the delivery frame.  When the
+    /// header is absent we fall back to `redelivered` to distinguish a first
+    /// delivery (1) from at least one redeliver (2).
+    fn extract_delivery_count(headers: &Option<FieldTable>, redelivered: bool) -> u32 {
         if let Some(ht) = headers {
             if let Some(AMQPValue::LongLongInt(n)) = ht.inner().get("x-delivery-count") {
                 return (*n as u32).saturating_add(1);
             }
         }
-        1
+        if redelivered {
+            2
+        } else {
+            1
+        }
     }
 
     /// Register a delivery in the in-flight map and return its [`ReceivedMessage`].
@@ -505,10 +514,11 @@ impl RabbitMqProvider {
         data: &[u8],
         headers: Option<FieldTable>,
         correlation_id: Option<String>,
+        redelivered: bool,
     ) -> ReceivedMessage {
         let session_id = Self::extract_session_id(&headers);
         let attributes = Self::extract_attributes(&headers);
-        let delivery_count = Self::extract_delivery_count(&headers);
+        let delivery_count = Self::extract_delivery_count(&headers, redelivered);
 
         let now = Timestamp::now();
         let lock_expires_at =
@@ -718,6 +728,7 @@ impl QueueProvider for RabbitMqProvider {
 
             if let Some(delivery) = get {
                 let headers = delivery.delivery.properties.headers().clone();
+                let redelivered = delivery.delivery.redelivered;
                 let correlation_id = delivery
                     .delivery
                     .properties
@@ -731,6 +742,7 @@ impl QueueProvider for RabbitMqProvider {
                         &delivery.delivery.data,
                         headers,
                         correlation_id,
+                        redelivered,
                     )
                     .await;
                 return Ok(Some(msg));
@@ -777,6 +789,7 @@ impl QueueProvider for RabbitMqProvider {
             match get {
                 Some(delivery) => {
                     let headers = delivery.delivery.properties.headers().clone();
+                    let redelivered = delivery.delivery.redelivered;
                     let correlation_id = delivery
                         .delivery
                         .properties
@@ -790,6 +803,7 @@ impl QueueProvider for RabbitMqProvider {
                             &delivery.delivery.data,
                             headers,
                             correlation_id,
+                            redelivered,
                         )
                         .await;
                     messages.push(msg);
@@ -1076,9 +1090,10 @@ impl RabbitMqSessionProvider {
         delivery: lapin::message::Delivery,
     ) -> ReceivedMessage {
         let delivery_tag = delivery.delivery_tag;
+        let redelivered = delivery.redelivered;
         let headers = delivery.properties.headers().clone();
         let attributes = RabbitMqProvider::extract_attributes(&headers);
-        let delivery_count = RabbitMqProvider::extract_delivery_count(&headers);
+        let delivery_count = RabbitMqProvider::extract_delivery_count(&headers, redelivered);
         let correlation_id = delivery
             .properties
             .correlation_id()

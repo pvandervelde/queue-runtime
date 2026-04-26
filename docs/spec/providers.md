@@ -213,6 +213,14 @@ pub struct InMemoryConfig {
 - QoS prefetch configurable via `prefetch_count`
 - `send_messages` sends sequentially (no native batch-publish in AMQP 0-9-1)
 
+### Known Limitation: `delivery_count` on Classic Queues
+
+RabbitMQ **Classic Queues** do not increment a per-message delivery counter on AMQP nack + requeue.  The broker only sets the `redelivered` boolean flag in the delivery frame.  After the first abandon the library returns `delivery_count = 2` (using the `redelivered` flag as a fallback), but subsequent abandons cannot be distinguished — `delivery_count` stays at 2 indefinitely.
+
+**Impact**: Callers that implement custom back-off or poison-message detection based on `delivery_count ≥ 3` will not get reliable results with Classic Queues beyond the first redelivery.
+
+**Workaround**: Use **Quorum Queues** instead of Classic Queues.  Quorum Queues populate the `x-delivery-count` AMQP header on every redelivery, which the provider reads and adds 1 to, giving an accurate monotonically-increasing count across all nack/requeue cycles.
+
 ```rust
 // RabbitMQ configuration
 pub struct RabbitMqConfig {

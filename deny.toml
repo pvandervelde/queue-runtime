@@ -67,6 +67,15 @@ feature-depth = 1
 ignore = [
     # paste is unmaintained but required by Azure SDK
     { id = "RUSTSEC-2024-0436", reason = "Transitive dependency from Azure SDK (azure_core). Author archived repo but crate still works." },
+    # rand 0.7.3 is pinned by http-types 2.12.0 (azure_core transitive). The unsoundness
+    # requires a custom logger that calls rand::rng() during reseeding — not a concern here.
+    { id = "RUSTSEC-2026-0097", reason = "Transitive via azure_core -> http-types -> rand 0.7.3. Cannot update without Azure SDK upgrade. Unsoundness requires a custom logger calling rand::rng() during reseeding, which this crate does not do." },
+    # rustls-pemfile is unmaintained; transitive via testcontainers -> bollard. No safe upgrade exists.
+    # Tracked: update testcontainers when a version that drops this dep is released.
+    { id = "RUSTSEC-2025-0134", reason = "Transitive dev-dependency via testcontainers 0.23 -> bollard -> rustls-pemfile. No safe upgrade available. Only affects test builds; not shipped in production." },
+    # tokio-tar PAX header vulnerability; transitive via testcontainers -> bollard. No safe upgrade.
+    # tokio-tar is used by testcontainers for image layer extraction in test environments only.
+    { id = "RUSTSEC-2025-0111", reason = "Transitive dev-dependency via testcontainers 0.23 -> tokio-tar. No safe upgrade available. Only affects test builds pulling Docker images; not shipped in production." },
 ]
 
 # If this is true, then cargo deny will use the git executable to fetch advisory database.

@@ -1,0 +1,28 @@
+[package]
+name = "queue-runtime-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# This is its own workspace so it does not inherit the root workspace toolchain
+# constraint. cargo-fuzz requires nightly to build libfuzzer-sys.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+queue-runtime = { path = ".." }
+
+[[bin]]
+name = "queue_name_new"
+path = "fuzz_targets/queue_name_new.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "session_id_new"
+path = "fuzz_targets/session_id_new.rs"
+test = false
+doc = false

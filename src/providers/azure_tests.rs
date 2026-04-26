@@ -744,3 +744,82 @@ mod provider_operation_tests {
         }
     }
 }
+
+// ============================================================================
+// Security Tests — credential redaction in Debug output
+// ============================================================================
+
+mod security_tests {
+    use super::*;
+
+    /// `AzureServiceBusConfig` must not expose connection string secrets through
+    /// its Debug impl.
+    ///
+    /// The connection string contains `SharedAccessKey=<base64 secret>`.  The
+    /// derived `Debug` impl will print this verbatim unless the type overrides
+    /// `fmt::Debug` and redacts it.  This test enforces that requirement.
+    #[test]
+    fn azure_config_debug_does_not_expose_connection_string_secret() {
+        let secret_key = "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY==";
+        let config = AzureServiceBusConfig {
+            connection_string: Some(format!(
+                "Endpoint=sb://ns.servicebus.windows.net/;\
+                 SharedAccessKeyName=RootManageSharedAccessKey;\
+                 SharedAccessKey={}",
+                secret_key
+            )),
+            namespace: None,
+            auth_method: AzureAuthMethod::ConnectionString,
+            use_sessions: false,
+            session_timeout: Duration::minutes(5),
+        };
+
+        let debug_output = format!("{:?}", config);
+
+        assert!(
+            !debug_output.contains(secret_key),
+            "Debug output must not contain the raw SharedAccessKey value. \
+             Add a custom Debug impl that redacts the connection_string field. \
+             Got: {}",
+            debug_output
+        );
+    }
+
+    /// `AzureServiceBusConfig::connection_string` must be omitted from serialized output.
+    ///
+    /// The field carries a `SharedAccessKey` secret.  Docs/spec/security.md and
+    /// Assertion 17 both require that sensitive fields are masked in Serde output.
+    /// The `#[serde(skip_serializing)]` annotation on the field enforces this.
+    /// `#[serde(skip)]` is intentionally NOT used so that configs can still be
+    /// loaded from files (deserialization is preserved).
+    #[test]
+    fn azure_config_serde_does_not_serialize_connection_string() {
+        let secret_key = "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY==";
+        let config = AzureServiceBusConfig {
+            connection_string: Some(format!(
+                "Endpoint=sb://ns.servicebus.windows.net/;\
+                 SharedAccessKeyName=RootManageSharedAccessKey;\
+                 SharedAccessKey={}",
+                secret_key
+            )),
+            namespace: None,
+            auth_method: AzureAuthMethod::ConnectionString,
+            use_sessions: false,
+            session_timeout: Duration::minutes(5),
+        };
+
+        let json = serde_json::to_string(&config).expect("serialization must succeed");
+
+        assert!(
+            !json.contains(secret_key),
+            "Serialized config must not contain the raw SharedAccessKey value. \
+             Ensure connection_string has #[serde(skip_serializing)]. Got: {}",
+            json
+        );
+        assert!(
+            !json.contains("connection_string"),
+            "connection_string key must not appear in serialized output. Got: {}",
+            json
+        );
+    }
+}

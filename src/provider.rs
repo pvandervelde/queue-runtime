@@ -2,6 +2,7 @@
 
 use chrono::Duration;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// Enumeration of supported queue providers
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,8 +99,9 @@ pub enum ProviderConfig {
 }
 
 /// Azure Service Bus configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AzureServiceBusConfig {
+    #[serde(skip_serializing)]
     pub connection_string: Option<String>,
     pub namespace: Option<String>,
     #[serde(skip, default = "default_auth_method")]
@@ -112,8 +114,23 @@ fn default_auth_method() -> crate::providers::AzureAuthMethod {
     crate::providers::AzureAuthMethod::DefaultCredential
 }
 
+impl fmt::Debug for AzureServiceBusConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AzureServiceBusConfig")
+            .field(
+                "connection_string",
+                &self.connection_string.as_ref().map(|_| "<REDACTED>"),
+            )
+            .field("namespace", &self.namespace)
+            .field("auth_method", &self.auth_method)
+            .field("use_sessions", &self.use_sessions)
+            .field("session_timeout", &self.session_timeout)
+            .finish()
+    }
+}
+
 /// AWS SQS configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AwsSqsConfig {
     pub region: String,
     pub access_key_id: Option<String>,
@@ -123,6 +140,20 @@ pub struct AwsSqsConfig {
     #[serde(skip)]
     pub secret_access_key: Option<String>,
     pub use_fifo_queues: bool,
+}
+
+impl fmt::Debug for AwsSqsConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AwsSqsConfig")
+            .field("region", &self.region)
+            .field("access_key_id", &self.access_key_id)
+            .field(
+                "secret_access_key",
+                &self.secret_access_key.as_ref().map(|_| "<REDACTED>"),
+            )
+            .field("use_fifo_queues", &self.use_fifo_queues)
+            .finish()
+    }
 }
 
 /// In-memory provider configuration
