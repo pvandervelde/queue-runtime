@@ -45,7 +45,7 @@ azure_core = "0.20"
 azure_identity = "0.20"
 
 # Configuration file loading from multiple formats
-config = "0.14.0"
+config = "0.15.22"
 
 # URL parsing and manipulation
 url = "2.5.8"
