@@ -59,7 +59,7 @@ sha2 = "0.11.0"
 # Hexadecimal encoding/decoding
 hex = "0.4.3"
 # XML parsing for Azure Service Bus messages
-quick-xml = "0.39.2"
+quick-xml = "0.41.0"
 
 # RabbitMQ AMQP 0-9-1 client
 lapin = "4.10.0"
