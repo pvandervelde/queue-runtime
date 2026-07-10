@@ -21,14 +21,14 @@ tracing = "0.1.44"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 # UUID generation for message identifiers
-uuid = { version = "1.23.1", features = ["v4", "serde"] }
+uuid = { version = "1.23.4", features = ["v4", "serde"] }
 
 # Date/time handling for message timestamps
 chrono = { version = "0.4.45", features = ["serde"] }
 
 # Error handling with derive macros and flexible error types
 thiserror = "2.0.18"
-anyhow = "1.0.102"
+anyhow = "1.0.103"
 
 # Async methods in traits (pre-1.0 but stable interface)
 async-trait = "0.1.89"
@@ -47,7 +47,7 @@ config = "0.15.25"
 # URL parsing and manipulation
 url = "2.5.8"
 # Efficient byte buffer handling for message payloads
-bytes = "1.11.1"
+bytes = "1.12.0"
 # Base64 encoding for credentials and tokens
 base64 = "0.22.1"
 # URL encoding for query parameters
