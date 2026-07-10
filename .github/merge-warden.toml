@@ -1,0 +1,141 @@
+schemaVersion = 1
+
+# ---------------------------------------------------------------------------
+# Pull request title validation
+# Enforces the Conventional Commits format on every PR title.
+# ---------------------------------------------------------------------------
+[policies.pullRequests.prTitle]
+required = true
+
+# Built-in conventional commit pattern — uncomment and edit to override.
+# pattern = "^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\\([a-z0-9_-]+\\))?!?: .+"
+
+# Label applied when the title does not match the pattern.
+label_if_missing = "pr-issue:invalid-title-format"
+
+# ---------------------------------------------------------------------------
+# Work item reference validation
+# Requires a closing-keyword issue reference in the PR description.
+# ---------------------------------------------------------------------------
+[policies.pullRequests.workItem]
+required = true
+
+# Built-in pattern matches: fixes #123, closes GH-456, resolves https://github.com/…/issues/789
+# Uncomment and edit to override.
+# pattern = "(?i)(fixes|closes|resolves|references|relates to)\\s+(#\\d+|GH-\\d+|https://github\\.com/[^/]+/[^/]+/issues/\\d+|[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+#\\d+)"
+
+# Label applied when no work item reference is found.
+label_if_missing = "pr-issue:missing-work-item"
+
+# ---------------------------------------------------------------------------
+# PR size labeling and oversized PR enforcement
+# ---------------------------------------------------------------------------
+[policies.pullRequests.prSize]
+enabled = true
+fail_on_oversized = false
+label_prefix = "size:"
+add_comment = true
+# When true, only additions are counted; deleted lines do not inflate the PR size.
+ignore_deletions = true
+
+# Files excluded from the line-change count (glob patterns).
+excluded_file_patterns = ["*.md", "*.txt", "docs/**", "**/*.lock"]
+
+# Optional: override the default size tier line-count boundaries.
+[policies.pullRequests.prSize.thresholds]
+xs = 10
+s = 50
+m = 100
+l = 350
+xl = 700
+
+# ---------------------------------------------------------------------------
+# WIP (Work In Progress) detection
+# When enabled, PRs whose title or description match a WIP pattern will fail
+# the check until all WIP markers are removed.
+# WIP blocking cannot be bypassed by any user.
+# ---------------------------------------------------------------------------
+[policies.pullRequests.wip]
+enforce_wip_blocking = true
+wip_label = "status:wip"
+wip_title_patterns = ["WIP", "wip:", "[wip]", "draft:", "Draft:"]
+wip_description_patterns = []
+
+# ---------------------------------------------------------------------------
+# PR state lifecycle labels
+# Maintains exactly one state label on the PR at any time.
+# ---------------------------------------------------------------------------
+[policies.pullRequests.prState]
+enabled = true
+draft_label = "status:draft"
+review_label = "status:in-review"
+approved_label = "status:approved"
+
+# ---------------------------------------------------------------------------
+# Issue metadata propagation
+# Copies milestone and/or Projects v2 membership from the referenced issue.
+# ---------------------------------------------------------------------------
+[policies.pullRequests.issuePropagation]
+sync_milestone_from_issue = true
+sync_project_from_issue = true
+
+# ---------------------------------------------------------------------------
+# Bypass rules
+# Allow specific GitHub accounts to skip individual policy checks.
+# Applies to: renovate[bot], dependabot[bot], and release-regent[bot].
+# Note: WIP blocking has no bypass mechanism and is always enforced.
+# ---------------------------------------------------------------------------
+[policies.bypassRules.title_convention]
+enabled = true
+users = ["renovate[bot]", "dependabot[bot]", "pv-release-regent[bot]"]
+
+[policies.bypassRules.work_items]
+enabled = true
+users = ["renovate[bot]", "dependabot[bot]", "pv-release-regent[bot]"]
+
+[policies.bypassRules.size]
+enabled = true
+users = ["renovate[bot]", "dependabot[bot]", "pv-release-regent[bot]"]
+
+# ---------------------------------------------------------------------------
+# Change type label detection
+# Maps conventional commit types in the PR title to repository labels.
+# ---------------------------------------------------------------------------
+[change_type_labels]
+enabled = true
+
+[change_type_labels.conventional_commit_mappings]
+feat = ["type:feat"]
+fix = ["type:fix"]
+docs = ["type:docs"]
+style = ["type:style"]
+refactor = ["type:refactor"]
+perf = ["type:perf"]
+test = ["type:test"]
+chore = ["type:chore"]
+ci = ["type:ci"]
+build = ["type:ci"]
+revert = ["type:revert"]
+
+[change_type_labels.fallback_label_settings]
+name_format = "type:{change_type}"
+create_if_missing = false
+
+[change_type_labels.fallback_label_settings.color_scheme]
+feat = "#fcc37b"
+fix = "#fcc37b"
+docs = "#fcc37b"
+style = "#fcc37b"
+refactor = "#fcc37b"
+perf = "#fcc37b"
+test = "#fcc37b"
+chore = "#fcc37b"
+ci = "#fcc37b"
+build = "#fcc37b"
+revert = "#fcc37b"
+
+[change_type_labels.detection_strategy]
+exact_match = true
+prefix_match = true
+description_match = true
+common_prefixes = ["type:"]
