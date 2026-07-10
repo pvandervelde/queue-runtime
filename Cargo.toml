@@ -14,17 +14,17 @@ readme = "README.md"
 
 [dependencies]
 # Core async runtime with full features for concurrent message processing
-tokio = { version = "1.52.1", features = ["full"] }
+tokio = { version = "1.52.3", features = ["full"] }
 # Structured logging and tracing
 tracing = "0.1.44"
 # Serialization framework with derive macros for message types
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
+serde_json = "1.0.150"
 # UUID generation for message identifiers
 uuid = { version = "1.23.1", features = ["v4", "serde"] }
 
 # Date/time handling for message timestamps
-chrono = { version = "0.4.44", features = ["serde"] }
+chrono = { version = "0.4.45", features = ["serde"] }
 
 # Error handling with derive macros and flexible error types
 thiserror = "2.0.18"
@@ -34,7 +34,7 @@ anyhow = "1.0.102"
 async-trait = "0.1.89"
 
 # HTTP client for API interactions
-reqwest = { version = "0.13.2", features = ["json"] }
+reqwest = { version = "0.13.4", features = ["json"] }
 
 # Azure Service Bus SDK
 azure_messaging_servicebus = "0.21.0"
@@ -42,7 +42,7 @@ azure_core = "1.0.0"
 azure_identity = "1.0.0"
 
 # Configuration file loading from multiple formats
-config = "0.15.22"
+config = "0.15.25"
 
 # URL parsing and manipulation
 url = "2.5.8"
