@@ -1,0 +1,152 @@
+# =============================================================================
+# Release Regent — repository dotfile (Level 5 of 5 in the hierarchy)
+# =============================================================================
+# This file lives at the root of the repository as `.release-regent.toml`.
+#
+# All settings shown are optional and match the built-in defaults unless
+# noted otherwise. Remove or comment out any section you do not need to
+# override.
+#
+# Full reference: https://github.com/pvandervelde/release_regent/blob/master/docs/configuration-reference.md
+# =============================================================================
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Core settings
+# ─────────────────────────────────────────────────────────────────────────────
+
+[core]
+# Prefix prepended to version numbers in tags and PR titles.
+version_prefix = "v"
+
+[core.branches]
+# The default (main) branch of the repository.
+main = "master"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Versioning
+# ─────────────────────────────────────────────────────────────────────────────
+
+[versioning]
+# How to calculate the next version.
+# Options: "conventional" (parse conventional commits) | "external" (custom command)
+strategy = "conventional"
+
+# Allow contributors to override the calculated bump via a PR comment
+# (e.g. /override-bump minor).
+allow_override = true
+
+# Bot accounts that open dependency-update PRs — skip projected-version comments
+# and post-merge refresh for these authors.
+excluded_pr_authors = ["dependabot[bot]", "renovate[bot]"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Release pull request
+# ─────────────────────────────────────────────────────────────────────────────
+
+[release_pr]
+# Template for the release PR title.
+# Supported placeholders: ${version} (e.g. "1.2.3"), ${version_tag} (e.g. "v1.2.3").
+title_template = "chore(release): prepare version ${version}"
+
+# Template for the release PR body.
+# Available variables: ${version}, ${version_tag}, ${changelog}, ${commit_count}, ${date}
+body_template = """
+## Release ${version_tag}
+
+### Changes
+
+${changelog}
+
+### Release Information
+
+- **Version**: ${version}
+- **Commits**: ${commit_count} commits since last release
+- **Generated**: ${date}
+
+### Checklist
+
+- [ ] Review changelog for accuracy
+- [ ] Verify version bump is appropriate
+- [ ] Check that all features are documented
+"""
+
+# Create the release PR as a draft.
+draft = false
+
+# Automatically detect and update well-known manifest files
+# (Cargo.toml, package.json, pyproject.toml, composer.json).
+auto_detect_manifests = false
+
+# Explicit list of manifest files to update on each release.
+manifest_files = [
+    { path = "Cargo.toml", format = "toml", version_key = "package.version" },
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GitHub releases
+# ─────────────────────────────────────────────────────────────────────────────
+# Release Regent creates the Git tag and GitHub release when the release PR
+# is merged. The publish.yml workflow then fires on `release: published` to
+# push the crate to crates.io.
+
+[releases]
+draft = false
+prerelease = false
+generate_notes = true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Changelog
+# ─────────────────────────────────────────────────────────────────────────────
+
+[changelog]
+# Rendering strategy: "internal" (default) | "git_cliff"
+# Use "git_cliff" to delegate to the bundled git-cliff-core Tera renderer.
+strategy = "internal"
+
+# Include commit author names in each entry.
+include_authors = true
+
+# Include short commit SHAs in each entry.
+include_shas = true
+
+# Hyperlink commits and pull requests where detectable.
+include_links = true
+
+# Section heading template — {title} is replaced with the commit type.
+section_template = "### {title}\n\n{entries}\n"
+
+# Per-commit line template — {description} and {sha} are replaced at runtime.
+commit_template = "- {description} [{sha}]"
+
+# Remote URL for link generation (leave blank to auto-detect from git remote).
+# remote_url = "https://github.com/pvandervelde/release_regent"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Error handling / retries
+# ─────────────────────────────────────────────────────────────────────────────
+
+[error_handling]
+# Maximum number of retry attempts for transient GitHub API errors.
+max_retries = 5
+
+# Exponential back-off multiplier between retries.
+backoff_multiplier = 2.0
+
+# Initial delay before the first retry (milliseconds).
+initial_delay_ms = 1000
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Notifications
+# ─────────────────────────────────────────────────────────────────────────────
+
+[notifications]
+enabled = true
+
+# Where to report errors encountered during processing.
+# Options: "github_issue" | "webhook" | "slack" | "none"
+strategy = "github_issue"
+
+[notifications.github_issue]
+# Labels applied to any auto-created error issue.
+labels = ["comp:tooling", "type:fix"]
+assignees = []
