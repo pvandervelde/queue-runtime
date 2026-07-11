@@ -78,6 +78,11 @@ ignore = [
     # tokio-tar PAX header vulnerability; transitive via testcontainers -> bollard. No safe upgrade.
     # tokio-tar is used by testcontainers for image layer extraction in test environments only.
     { id = "RUSTSEC-2025-0111", reason = "Transitive dev-dependency via testcontainers 0.23 -> tokio-tar. No safe upgrade available. Only affects test builds pulling Docker images; not shipped in production." },
+    # http-types is unmaintained (RUSTSEC-2026-0174); transitive via azure_messaging_servicebus 0.21.0
+    # -> azure_core 0.21.0 -> http-types 2.12.0. The Authorization::value/WwwAuthenticate::value ASCII
+    # invariant issue is not exploitable in this crate's usage. Revisit when azure_messaging_servicebus
+    # upgrades past 0.21.
+    { id = "RUSTSEC-2026-0174", reason = "Transitive via azure_messaging_servicebus 0.21.0 -> azure_core 0.21.0 -> http-types 2.12.0. The ASCII invariant issue in Authorization::value/WwwAuthenticate::value is not reachable in this crate. Blocked on azure_messaging_servicebus upgrading past 0.21." },
 ]
 
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
