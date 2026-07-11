@@ -75,7 +75,7 @@ draft = false
 
 # Automatically detect and update well-known manifest files
 # (Cargo.toml, package.json, pyproject.toml, composer.json).
-auto_detect_manifests = true
+auto_detect_manifests = false
 
 # Explicit list of manifest files to update on each release.
 manifest_files = [
