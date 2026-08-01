@@ -38,7 +38,7 @@ reqwest = { version = "0.13.4", features = ["json"] }
 
 # Azure Service Bus SDK
 azure_messaging_servicebus = "0.21.0"
-azure_core = "1.0.0"
+azure_core = "1.1.0"
 azure_identity = "1.0.0"
 
 # Configuration file loading from multiple formats
