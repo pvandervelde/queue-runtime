@@ -18,8 +18,8 @@ tokio = { version = "1.52.3", features = ["full"] }
 # Structured logging and tracing
 tracing = "0.1.44"
 # Serialization framework with derive macros for message types
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 # UUID generation for message identifiers
 uuid = { version = "1.23.4", features = ["v4", "serde"] }
 
@@ -31,7 +31,7 @@ thiserror = "2.0.18"
 anyhow = "1.0.103"
 
 # Async methods in traits (pre-1.0 but stable interface)
-async-trait = "0.1.89"
+async-trait = "0.1.92"
 
 # HTTP client for API interactions
 reqwest = { version = "0.13.4", features = ["json"] }
@@ -66,7 +66,7 @@ lapin = "4.10.0"
 
 # NATS messaging client with JetStream support
 async-nats = "0.49.1"
-futures = "0.3.32"
+futures = "0.3.34"
 
 [features]
 # Gate integration tests that require Docker (NATS, RabbitMQ brokers).
