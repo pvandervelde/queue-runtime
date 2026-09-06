@@ -49,7 +49,7 @@ url = "2.5.8"
 # Efficient byte buffer handling for message payloads
 bytes = "1.12.0"
 # Base64 encoding for credentials and tokens
-base64 = "0.22.1"
+base64 = "0.23.1"
 # URL encoding for query parameters
 urlencoding = "2.1.3"
 # HMAC for message authentication
