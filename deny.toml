@@ -83,6 +83,10 @@ ignore = [
     # invariant issue is not exploitable in this crate's usage. Revisit when azure_messaging_servicebus
     # upgrades past 0.21.
     { id = "RUSTSEC-2026-0174", reason = "Transitive via azure_messaging_servicebus 0.21.0 -> azure_core 0.21.0 -> http-types 2.12.0. The ASCII invariant issue in Authorization::value/WwwAuthenticate::value is not reachable in this crate. Blocked on azure_messaging_servicebus upgrading past 0.21." },
+    # azure_core logs authorization headers; transitive via azure_messaging_servicebus 0.21.0.
+    # This is the latest Service Bus SDK release, so no compatible upstream upgrade exists.
+    # Revisit when azure_messaging_servicebus upgrades past 0.21.
+    { id = "RUSTSEC-2026-0275", reason = "Transitive via azure_messaging_servicebus 0.21.0 -> azure_core 0.21.0. No compatible upstream update exists; this crate does not log credentials and redacts Azure configuration debug output. Revisit when the Service Bus SDK upgrades its Azure Core dependency." },
 ]
 
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
