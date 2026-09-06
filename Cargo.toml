@@ -14,7 +14,7 @@ readme = "README.md"
 
 [dependencies]
 # Core async runtime with full features for concurrent message processing
-tokio = { version = "1.52.3", features = ["full"] }
+tokio = { version = "1.53.1", features = ["full"] }
 # Structured logging and tracing
 tracing = "0.1.44"
 # Serialization framework with derive macros for message types
