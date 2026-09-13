@@ -973,24 +973,14 @@ impl AwsSqsProvider {
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e)) if e.name().as_ref() == b"QueueUrl" => {
+                Ok(Event::Start(ref e)) if e.name().as_ref() == "QueueUrl" => {
                     in_queue_url = true;
                 }
                 Ok(Event::Text(e)) if in_queue_url => {
-                    return e
-                        .decode()
+                    return quick_xml::escape::unescape(e.as_ref())
+                        .map(|u| u.into_owned())
                         .map_err(|e| {
-                            AwsError::SerializationError(format!("Failed to parse XML: {}", e))
-                        })
-                        .and_then(|s| {
-                            quick_xml::escape::unescape(&s)
-                                .map(|u| u.into_owned())
-                                .map_err(|e| {
-                                    AwsError::SerializationError(format!(
-                                        "Failed to unescape XML: {}",
-                                        e
-                                    ))
-                                })
+                            AwsError::SerializationError(format!("Failed to unescape XML: {}", e))
                         });
                 }
                 Ok(Event::Eof) => break,
@@ -1028,25 +1018,25 @@ impl AwsSqsProvider {
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => match e.name().as_ref() {
-                    b"Error" => in_error = true,
-                    b"Code" if in_error => in_code = true,
-                    b"Message" if in_error => in_message = true,
+                    "Error" => in_error = true,
+                    "Code" if in_error => in_code = true,
+                    "Message" if in_error => in_message = true,
                     _ => {}
                 },
                 Ok(Event::Text(e)) => {
                     if in_code {
-                        error_code = e.decode().ok().and_then(|s| {
-                            quick_xml::escape::unescape(&s).ok().map(|u| u.into_owned())
-                        });
+                        error_code = quick_xml::escape::unescape(e.as_ref())
+                            .ok()
+                            .map(|u| u.into_owned());
                         in_code = false;
                     } else if in_message {
-                        error_message = e.decode().ok().and_then(|s| {
-                            quick_xml::escape::unescape(&s).ok().map(|u| u.into_owned())
-                        });
+                        error_message = quick_xml::escape::unescape(e.as_ref())
+                            .ok()
+                            .map(|u| u.into_owned());
                         in_message = false;
                     }
                 }
-                Ok(Event::End(ref e)) if e.name().as_ref() == b"Error" => {
+                Ok(Event::End(ref e)) if e.name().as_ref() == "Error" => {
                     in_error = false;
                 }
                 Ok(Event::Eof) => break,
@@ -1089,13 +1079,11 @@ impl AwsSqsProvider {
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e)) if e.name().as_ref() == b"MessageId" => {
+                Ok(Event::Start(ref e)) if e.name().as_ref() == "MessageId" => {
                     in_message_id = true;
                 }
                 Ok(Event::Text(e)) if in_message_id => {
-                    let msg_id = e.decode().map(|s| s.into_owned()).map_err(|e| {
-                        AwsError::SerializationError(format!("Failed to parse XML: {}", e))
-                    })?;
+                    let msg_id = e.as_ref().to_string();
 
                     // Parse the message ID string
                     use std::str::FromStr;
@@ -1152,7 +1140,7 @@ impl AwsSqsProvider {
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => match e.name().as_ref() {
-                    b"Message" => {
+                    "Message" => {
                         in_message = true;
                         // Reset current message fields
                         current_message_id = None;
@@ -1161,15 +1149,15 @@ impl AwsSqsProvider {
                         current_session_id = None;
                         current_delivery_count = 1;
                     }
-                    b"MessageId" if in_message => in_message_id = true,
-                    b"ReceiptHandle" if in_message => in_receipt_handle = true,
-                    b"Body" if in_message => in_body = true,
-                    b"Name" if in_message => in_attribute_name = true,
-                    b"Value" if in_message => in_attribute_value = true,
+                    "MessageId" if in_message => in_message_id = true,
+                    "ReceiptHandle" if in_message => in_receipt_handle = true,
+                    "Body" if in_message => in_body = true,
+                    "Name" if in_message => in_attribute_name = true,
+                    "Value" if in_message => in_attribute_value = true,
                     _ => {}
                 },
                 Ok(Event::Text(e)) => {
-                    let text = e.decode().ok().map(|s| s.into_owned());
+                    let text: Option<String> = Some(e.as_ref().to_string());
                     if in_message_id {
                         current_message_id = text;
                         in_message_id = false;
@@ -1199,7 +1187,7 @@ impl AwsSqsProvider {
                         current_attribute_name = None;
                     }
                 }
-                Ok(Event::End(ref e)) if e.name().as_ref() == b"Message" => {
+                Ok(Event::End(ref e)) if e.name().as_ref() == "Message" => {
                     in_message = false;
 
                     // Build ReceivedMessage if we have required fields
@@ -1679,14 +1667,12 @@ impl AwsSqsProvider {
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => match e.name().as_ref() {
-                    b"SendMessageBatchResultEntry" => in_successful = true,
-                    b"MessageId" if in_successful => in_message_id = true,
+                    "SendMessageBatchResultEntry" => in_successful = true,
+                    "MessageId" if in_successful => in_message_id = true,
                     _ => {}
                 },
                 Ok(Event::Text(e)) if in_message_id => {
-                    let msg_id = e.decode().map(|s| s.into_owned()).map_err(|e| {
-                        AwsError::SerializationError(format!("Failed to parse XML: {}", e))
-                    })?;
+                    let msg_id = e.as_ref().to_string();
 
                     // Parse the message ID string
                     use std::str::FromStr;
@@ -1695,7 +1681,7 @@ impl AwsSqsProvider {
                     message_ids.push(message_id);
                     in_message_id = false;
                 }
-                Ok(Event::End(ref e)) if e.name().as_ref() == b"SendMessageBatchResultEntry" => {
+                Ok(Event::End(ref e)) if e.name().as_ref() == "SendMessageBatchResultEntry" => {
                     in_successful = false;
                 }
                 Ok(Event::Eof) => break,
@@ -1867,21 +1853,21 @@ impl AwsSessionProvider {
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => match e.name().as_ref() {
-                    b"Error" => in_error = true,
-                    b"Code" if in_error => in_code = true,
-                    b"Message" if in_error => in_message = true,
+                    "Error" => in_error = true,
+                    "Code" if in_error => in_code = true,
+                    "Message" if in_error => in_message = true,
                     _ => {}
                 },
                 Ok(Event::Text(e)) => {
                     if in_code {
-                        error_code = e.decode().ok().and_then(|s| {
-                            quick_xml::escape::unescape(&s).ok().map(|u| u.into_owned())
-                        });
+                        error_code = quick_xml::escape::unescape(e.as_ref())
+                            .ok()
+                            .map(|u| u.into_owned());
                         in_code = false;
                     } else if in_message {
-                        error_message = e.decode().ok().and_then(|s| {
-                            quick_xml::escape::unescape(&s).ok().map(|u| u.into_owned())
-                        });
+                        error_message = quick_xml::escape::unescape(e.as_ref())
+                            .ok()
+                            .map(|u| u.into_owned());
                         in_message = false;
                     }
                 }
@@ -1953,7 +1939,7 @@ impl AwsSessionProvider {
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => match e.name().as_ref() {
-                    b"Message" => {
+                    "Message" => {
                         in_message = true;
                         current_message_id = None;
                         current_receipt_handle = None;
@@ -1961,15 +1947,15 @@ impl AwsSessionProvider {
                         current_session_id = None;
                         current_delivery_count = 1;
                     }
-                    b"MessageId" if in_message => in_message_id = true,
-                    b"ReceiptHandle" if in_message => in_receipt_handle = true,
-                    b"Body" if in_message => in_body = true,
-                    b"Name" if in_message => in_attribute_name = true,
-                    b"Value" if in_message => in_attribute_value = true,
+                    "MessageId" if in_message => in_message_id = true,
+                    "ReceiptHandle" if in_message => in_receipt_handle = true,
+                    "Body" if in_message => in_body = true,
+                    "Name" if in_message => in_attribute_name = true,
+                    "Value" if in_message => in_attribute_value = true,
                     _ => {}
                 },
                 Ok(Event::Text(e)) => {
-                    let text = e.decode().ok().map(|s| s.into_owned());
+                    let text: Option<String> = Some(e.as_ref().to_string());
                     if in_message_id {
                         current_message_id = text;
                         in_message_id = false;
@@ -1999,7 +1985,7 @@ impl AwsSessionProvider {
                         current_attribute_name = None;
                     }
                 }
-                Ok(Event::End(ref e)) if e.name().as_ref() == b"Message" => {
+                Ok(Event::End(ref e)) if e.name().as_ref() == "Message" => {
                     in_message = false;
 
                     if let (Some(body_base64), Some(receipt_handle)) =
