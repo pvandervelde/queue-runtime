@@ -21,13 +21,13 @@ tracing = "0.1.44"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 # UUID generation for message identifiers
-uuid = { version = "1.26.0", features = ["v4", "serde"] }
+uuid = { version = "1.27.0", features = ["v4", "serde"] }
 
 # Date/time handling for message timestamps
 chrono = { version = "0.4.45", features = ["serde"] }
 
 # Error handling with derive macros and flexible error types
-thiserror = "2.0.20"
+thiserror = "2.0.21"
 anyhow = "1.0.104"
 
 # Async methods in traits (pre-1.0 but stable interface)
@@ -62,7 +62,7 @@ hex = "0.4.3"
 quick-xml = "0.42.0"
 
 # RabbitMQ AMQP 0-9-1 client
-lapin = "4.10.0"
+lapin = "4.12.0"
 
 # NATS messaging client with JetStream support
 async-nats = "0.50.0"
