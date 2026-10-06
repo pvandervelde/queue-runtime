@@ -14,7 +14,7 @@ readme = "README.md"
 
 [dependencies]
 # Core async runtime with full features for concurrent message processing
-tokio = { version = "1.53.1", features = ["full"] }
+tokio = { version = "1.53.2", features = ["full"] }
 # Structured logging and tracing
 tracing = "0.1.44"
 # Serialization framework with derive macros for message types
@@ -34,7 +34,7 @@ anyhow = "1.0.104"
 async-trait = "0.1.92"
 
 # HTTP client for API interactions
-reqwest = { version = "0.13.4", features = ["json"] }
+reqwest = { version = "0.13.5", features = ["json"] }
 
 # Azure Service Bus SDK
 azure_messaging_servicebus = "0.21.0"
@@ -42,7 +42,7 @@ azure_core = "1.1.0"
 azure_identity = "1.0.0"
 
 # Configuration file loading from multiple formats
-config = "0.15.25"
+config = "0.15.27"
 
 # URL parsing and manipulation
 url = "2.5.8"
@@ -78,7 +78,7 @@ integration-tests = []
 # Temporary file creation for tests
 tempfile = "=3.27.0"
 # Tokio testing utilities
-tokio-test = "=0.4.5"
+tokio-test = "=0.4.6"
 # Property-based testing
 proptest = "=1.11.0"
 # Container-based integration testing (requires Docker)
