@@ -3,8 +3,10 @@
   "extends": [
     "config:best-practices"
   ],
-  "dependencyDashboard": true,
-  "dependencyDashboardTitle": "Dependency Updates Dashboard",
+  "dependencyDashboard": {
+    "enabled": true,
+    "title": "Dependency Updates Dashboard"
+  },
   "schedule": [
     "on the first day of the month"
   ],
